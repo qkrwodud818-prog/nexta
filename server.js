@@ -21,8 +21,10 @@ require("dotenv").config();
 
 const { generateCardNews } = require("./social/cardnews");
 const { publishCarouselPost, verifyWebhook, handleCommentWebhook } = require("./social/instagram");
+const db = require("./db"); // SQLite(better-sqlite3) 기반 저장소 — data/nexta.db
 
 const app = express();
+app.set("trust proxy", 1); // Render 등 프록시 뒤에서도 req.ip가 실제 접속자 IP를 가리키게 함
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -158,36 +160,11 @@ async function callWithFallback(config, roleKey, prompt, useSearch, maxTokens) {
   throw lastError || new Error("모든 모델 호출에 실패했습니다");
 }
 
-/* ────────────────────── 저장 공간 (기억 · 전문지식) ──────────────────────
- * 주의: 이 서버가 무료 호스팅(Render 등)에 올라가 있으면, 재배포하거나 서버가
- * 재시작될 때 이 파일들이 초기화될 수 있다. 지금은 "일단 동작하는" 수준으로 두고,
- * 나중에 데이터가 중요해지면 진짜 데이터베이스로 옮기면 된다.
- */
-const DATA_DIR = path.join(__dirname, "data");
-
-function ensureDataDir() {
-  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) { /* 이미 있으면 무시 */ }
-}
-function loadJSONFile(name, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(DATA_DIR, name), "utf-8"));
-  } catch (e) {
-    return fallback;
-  }
-}
-function saveJSONFile(name, data) {
-  ensureDataDir();
-  try {
-    fs.writeFileSync(path.join(DATA_DIR, name), JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.warn("[저장 실패]", name, e.message);
-  }
-}
-
 /* ────────────────────── 회원 · 로그인(세션) · 크레딧 ──────────────────────
  * 상품형: 여러 고객이 각자 가입해서 자기 크레딧으로 사용한다.
- * ⚠️ 지금은 users.json 파일에 저장한다. 무료 호스팅(Render)은 재배포 시 파일이
- *    초기화될 수 있으므로, 실제 고객을 받기 전에 진짜 데이터베이스로 옮겨야 한다.
+ * data/nexta.db (SQLite)에 저장한다 — 실제 DB이므로 사용자별 행만 갱신되고
+ * 동시 요청에도 안전하다. 단, 무료 호스팅(Render 등)에서 재배포 시 디스크가
+ * 초기화될 수 있는 문제는 별개다 — 영구 디스크가 필요하면 README 참고.
  * ⚠️ 실제 결제(돈 받기)는 아직 없다. '충전'은 테스트용으로 크레딧만 올려준다.
  *    나중에 이 자리에 토스페이먼츠 등 결제대행사(PG)를 연결한다. (아래 /api/topup 참고)
  */
@@ -208,11 +185,6 @@ const CREDIT_PACKAGES = {
   medium: { credits: 1500, amount: 12000, label: "1,500 크레딧 (20% 더)" },
   large: { credits: 4000, amount: 28000, label: "4,000 크레딧 (30% 더)" },
 };
-
-function loadUsers() { return loadJSONFile("users.json", {}); }
-function saveUsers(u) { saveJSONFile("users.json", u); }
-function loadOrders() { return loadJSONFile("orders.json", {}); }
-function saveOrders(o) { saveJSONFile("orders.json", o); }
 
 function hashPassword(password, salt) {
   salt = salt || crypto.randomBytes(16).toString("hex");
@@ -251,17 +223,81 @@ function parseCookies(req) {
   });
   return out;
 }
+// CSRF 토큰 — 로그인 시 세션 쿠키와 함께 "읽을 수 있는" 쿠키로 발급하고, 화면단(JS)이 이 값을
+// 그대로 X-CSRF-Token 헤더에 실어 보내게 한다(더블 서브밋 쿠키 방식). 공격자의 다른 사이트는
+// 이 쿠키값을 읽을 수 없으므로(Same-Origin 정책) 값을 맞춰 보낼 수 없다.
+function makeCsrfToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+// 한 응답 안에서 setSession/clearSession/기기쿠키 등 여러 곳이 각자 쿠키를 하나씩 추가해도
+// 서로 덮어쓰지 않도록 Set-Cookie 헤더를 누적한다(res.setHeader는 기본적으로 통째로 교체함).
+function addCookie(res, cookieStr) {
+  const existing = res.getHeader("Set-Cookie");
+  const arr = existing ? (Array.isArray(existing) ? existing.slice() : [existing]) : [];
+  arr.push(cookieStr);
+  res.setHeader("Set-Cookie", arr);
+}
 function setSession(res, userId) {
   const token = encodeURIComponent(signValue(userId));
-  res.setHeader("Set-Cookie", "vo_session=" + token + "; HttpOnly; Path=/; Max-Age=" + (60 * 60 * 24 * 30) + "; SameSite=Lax");
+  const maxAge = 60 * 60 * 24 * 30;
+  const csrf = makeCsrfToken();
+  addCookie(res, "vo_session=" + token + "; HttpOnly; Path=/; Max-Age=" + maxAge + "; SameSite=Lax");
+  addCookie(res, "vo_csrf=" + csrf + "; Path=/; Max-Age=" + maxAge + "; SameSite=Lax");
 }
 function clearSession(res) {
-  res.setHeader("Set-Cookie", "vo_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax");
+  addCookie(res, "vo_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax");
+  addCookie(res, "vo_csrf=; Path=/; Max-Age=0; SameSite=Lax");
+}
+// 체험(게스트) 입장을 "브라우저당 1회"로 제한하기 위한 기기 식별 쿠키.
+// 쿠키를 지우면 다시 체험할 수 있지만, 최소한 무심코 여러 번 누르는 것과 의도적으로
+// 계속 초기화하는 것 사이의 문턱은 만들어준다. IP 상한과 함께 써서 이중으로 막는다.
+const DEVICE_COOKIE_MAX_AGE = 60 * 60 * 24 * 400; // 브라우저가 허용하는 쿠키 최대 수명(약 400일)
+function getOrCreateDeviceId(req, res) {
+  const existing = parseCookies(req).vo_device;
+  if (existing && /^[a-f0-9]{32}$/.test(existing)) return existing;
+  const id = crypto.randomBytes(16).toString("hex");
+  addCookie(res, "vo_device=" + id + "; HttpOnly; Path=/; Max-Age=" + DEVICE_COOKIE_MAX_AGE + "; SameSite=Lax");
+  return id;
+}
+// 세션을 바꾸지 않는 상태변경 요청(POST/PUT/DELETE)을 검사한다. 로그인 전 접근하는
+// signup/login/guest, 그리고 메타(인스타그램)가 서버 대 서버로 직접 호출하는 웹훅은
+// 브라우저 쿠키를 쓰지 않으므로 검사 대상에서 제외한다.
+const CSRF_EXEMPT_PATHS = new Set(["/api/signup", "/api/login", "/api/guest", "/webhooks/instagram"]);
+function csrfProtection(req, res, next) {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  if (CSRF_EXEMPT_PATHS.has(req.path)) return next();
+  const cookieToken = parseCookies(req).vo_csrf;
+  const headerToken = req.headers["x-csrf-token"];
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    return res.status(403).json({ error: "요청이 올바르지 않습니다. 새로고침 후 다시 시도해 주세요." });
+  }
+  next();
+}
+app.use(csrfProtection);
+
+// 결제·비밀정보 암호화 — 인스타그램 액세스 토큰처럼 그대로 새어나가면 계정을 탈취당할 수 있는
+// 값은 파일에 평문으로 저장하지 않는다. SESSION_SECRET에서 파생한 키로 AES-256-GCM 암호화한다.
+const ENCRYPTION_KEY = crypto.createHash("sha256").update(String(SESSION_SECRET)).digest();
+function encryptSecret(text) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", ENCRYPTION_KEY, iv);
+  const enc = Buffer.concat([cipher.update(String(text), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, enc]).toString("base64");
+}
+function decryptSecret(payload) {
+  const buf = Buffer.from(String(payload), "base64");
+  const iv = buf.subarray(0, 12);
+  const tag = buf.subarray(12, 28);
+  const enc = buf.subarray(28);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", ENCRYPTION_KEY, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(enc), decipher.final()]).toString("utf8");
 }
 function currentUser(req) {
   const userId = unsignValue(parseCookies(req).vo_session);
   if (!userId) return null;
-  return loadUsers()[userId] || null;
+  return db.getUserById(userId);
 }
 function publicUser(u) {
   return {
@@ -273,27 +309,19 @@ function publicUser(u) {
     cardnewsHistory: (u.cardnewsHistory || []).slice(-20).reverse(),
   };
 }
-function jobCost(agentKeys) {
-  return agentKeys.length * COST_PER_AGENT + COST_MANAGER;
-}
 // 작업이 실제로 끝나(보고서가 나온) 시점에 한 번만 차감한다 — 도중에 오류가 나면 차감하지 않는다.
 function chargeUser(userId, amount, meta) {
-  const users = loadUsers();
-  const u = users[userId];
+  const u = db.getUserById(userId);
   if (!u) return null;
-  u.credits = Math.max(0, (u.credits || 0) - amount);
-  u.usage = u.usage || [];
-  u.usage.push(Object.assign({ at: nowKR(), amount }, meta || {}));
-  if (u.usage.length > 60) u.usage = u.usage.slice(-60);
-  saveUsers(users);
-  return u.credits;
+  const credits = Math.max(0, (u.credits || 0) - amount);
+  db.updateCredits(userId, credits, u.ceiling);
+  db.addUsage(userId, Object.assign({ at: nowKR(), amount }, meta || {}));
+  return credits;
 }
 
 function getMemoryContext(userId, roleKey) {
-  const mem = loadJSONFile("memory.json", {});
-  const list = (mem[userId] && mem[userId][roleKey]) || [];
-  if (!list.length) return "";
-  const recent = list.slice(-5);
+  const recent = db.getMemoryEntries(userId, roleKey, 5);
+  if (!recent.length) return "";
   return (
     "[지난 작업 기억 — 예전에 이 담당자가 했던 일이다. 참고만 하고, 이번 지시를 우선한다]\n" +
     recent.map((m, i) => (i + 1) + ". (" + m.date + ") 질문: " + m.question + " → 그때 결과 요약: " + m.summary).join("\n") +
@@ -301,21 +329,15 @@ function getMemoryContext(userId, roleKey) {
   );
 }
 function addMemory(userId, roleKey, question, summary) {
-  const mem = loadJSONFile("memory.json", {});
-  if (!mem[userId]) mem[userId] = {};
-  if (!mem[userId][roleKey]) mem[userId][roleKey] = [];
-  mem[userId][roleKey].push({
+  db.addMemoryEntry(userId, roleKey, {
     date: nowKR(),
     question: String(question || "").slice(0, 200),
     summary: String(summary || "").slice(0, 300),
   });
-  if (mem[userId][roleKey].length > 8) mem[userId][roleKey] = mem[userId][roleKey].slice(-8);
-  saveJSONFile("memory.json", mem);
 }
 
 function getKnowledgeContext(userId, role) {
-  const kb = loadJSONFile("knowledge.json", {});
-  const list = (kb[userId] && kb[userId][role]) || [];
+  const list = db.getKnowledge(userId, role);
   if (!list.length) return "";
   let joined = list.map((k) => "▶ " + k.title + "\n" + k.text).join("\n\n");
   if (joined.length > 6000) joined = joined.slice(0, 6000) + "\n...(자료가 길어 일부만 표시됨)";
@@ -328,8 +350,7 @@ function getKnowledgeContext(userId, role) {
 // 브랜드 가이드 — 특정 담당자 전용이 아니라 '모든' 담당자가 공통으로 지켜야 하는 말투·금칙어·규칙.
 const BRAND_KEY = "브랜드가이드";
 function getBrandContext(userId) {
-  const kb = loadJSONFile("knowledge.json", {});
-  const list = (kb[userId] && kb[userId][BRAND_KEY]) || [];
+  const list = db.getKnowledge(userId, BRAND_KEY);
   if (!list.length) return "";
   let joined = list.map((k) => "▶ " + k.title + "\n" + k.text).join("\n\n");
   if (joined.length > 3000) joined = joined.slice(0, 3000) + "\n...(생략)";
@@ -726,22 +747,19 @@ app.post("/api/signup", (req, res) => {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "이메일 형식이 올바르지 않습니다." });
   if (password.length < 6) return res.status(400).json({ error: "비밀번호는 6자 이상으로 정해 주세요." });
 
-  const users = loadUsers();
-  if (Object.values(users).some((u) => u.email === email)) return res.status(409).json({ error: "이미 가입된 이메일입니다." });
+  if (db.emailExists(email)) return res.status(409).json({ error: "이미 가입된 이메일입니다." });
 
   const { salt, hash } = hashPassword(password);
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  users[id] = { id, email, salt, hash, credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, usage: [], company: { name: "", logo: "" }, createdAt: nowKR() };
-  saveUsers(users);
+  const u = db.createUser({ id, email, salt, hash, credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, guest: false, createdAt: nowKR() });
   setSession(res, id);
-  res.json({ ok: true, user: publicUser(users[id]) });
+  res.json({ ok: true, user: publicUser(u) });
 });
 
 app.post("/api/login", (req, res) => {
   const email = String((req.body && req.body.email) || "").trim().toLowerCase();
   const password = String((req.body && req.body.password) || "");
-  const users = loadUsers();
-  const u = Object.values(users).find((x) => x.email === email);
+  const u = db.getUserByEmail(email);
   if (!u || !verifyPassword(password, u.salt, u.hash)) {
     return res.status(401).json({ error: "이메일 또는 비밀번호가 맞지 않습니다." });
   }
@@ -756,17 +774,43 @@ app.post("/api/logout", (req, res) => {
 
 // 로그인 없이 둘러보기 — 임시 체험 계정을 즉시 만들고 로그인 상태로 만든다.
 // (비밀번호가 없어 /api/login으로는 못 들어가고, 쿠키로만 유지된다)
+// 이중으로 막는다:
+//  1) 기기(브라우저) 기준 — 쿠키로 식별한 이 브라우저가 예전에 체험한 적 있으면 평생 재입장 불가.
+//     같은 집 다른 컴퓨터·같은 통신사 다른 사람처럼 IP만 같고 실제로는 다른 사람인 경우를
+//     오탐하지 않기 위한 1차 기준.
+//  2) IP 기준 — 기기 쿠키를 지우고 계속 새로 만드는 것까지 막는 상한선(하루 3개).
+const GUEST_LIMIT_PER_WINDOW = 3;
+const GUEST_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24시간
+const guestCreationLog = new Map(); // ip -> timestamps[]
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamps] of guestCreationLog) {
+    const kept = timestamps.filter((t) => now - t < GUEST_LIMIT_WINDOW_MS);
+    if (kept.length) guestCreationLog.set(ip, kept);
+    else guestCreationLog.delete(ip);
+  }
+}, 30 * 60 * 1000);
+
 app.post("/api/guest", (req, res) => {
-  const users = loadUsers();
+  const deviceId = getOrCreateDeviceId(req, res);
+  if (db.hasGuestDevice(deviceId)) {
+    return res.status(429).json({ error: "이 브라우저에서는 이미 체험해 보셨습니다. 회원가입 후 계속 이용해 주세요." });
+  }
+
+  const ip = req.ip || "unknown";
+  const now = Date.now();
+  const timestamps = (guestCreationLog.get(ip) || []).filter((t) => now - t < GUEST_LIMIT_WINDOW_MS);
+  if (timestamps.length >= GUEST_LIMIT_PER_WINDOW) {
+    return res.status(429).json({ error: "체험 입장은 하루에 정해진 횟수만 가능합니다. 회원가입 후 이용해 주세요." });
+  }
+  timestamps.push(now);
+  guestCreationLog.set(ip, timestamps);
+
   const id = "guest_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  users[id] = {
-    id, email: "체험 사용자", salt: "", hash: "",
-    credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, usage: [], guest: true,
-    company: { name: "", logo: "" }, createdAt: nowKR(),
-  };
-  saveUsers(users);
+  const u = db.createUser({ id, email: "체험 사용자", credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, guest: true, createdAt: nowKR() });
+  db.recordGuestDevice(deviceId, id, ip, nowKR());
   setSession(res, id);
-  res.json({ ok: true, user: publicUser(users[id]) });
+  res.json({ ok: true, user: publicUser(u) });
 });
 
 app.get("/api/me", (req, res) => {
@@ -779,11 +823,9 @@ app.get("/api/me", (req, res) => {
 app.post("/api/topup", (req, res) => {
   const u = currentUser(req);
   if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
-  const users = loadUsers();
-  users[u.id].credits = (users[u.id].credits || 0) + TEST_TOPUP;
-  users[u.id].ceiling = users[u.id].credits; // 게이지 기준선을 새로 채운 만큼으로 초기화
-  saveUsers(users);
-  res.json({ ok: true, user: publicUser(users[u.id]) });
+  const credits = (u.credits || 0) + TEST_TOPUP;
+  db.updateCredits(u.id, credits, credits); // 게이지 기준선을 새로 채운 만큼으로 초기화
+  res.json({ ok: true, user: publicUser(db.getUserById(u.id)) });
 });
 
 /* ══════════════════════════════════════════════════════════════
@@ -808,9 +850,7 @@ app.post("/api/payment/create-order", (req, res) => {
   if (!pkg) return res.status(400).json({ error: "존재하지 않는 상품입니다." });
 
   const orderId = "nexta_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const orders = loadOrders();
-  orders[orderId] = { userId: u.id, credits: pkg.credits, amount: pkg.amount, label: pkg.label, status: "pending", createdAt: nowKR() };
-  saveOrders(orders);
+  db.createOrder(orderId, { userId: u.id, credits: pkg.credits, amount: pkg.amount, label: pkg.label, status: "pending", createdAt: nowKR() });
 
   res.json({ ok: true, orderId, amount: pkg.amount, orderName: pkg.label, clientKey: TOSS_CLIENT_KEY });
 });
@@ -818,8 +858,7 @@ app.post("/api/payment/create-order", (req, res) => {
 // 결제 성공 콜백 — 토스가 돌려준 paymentKey로 "진짜 결제됐는지" 서버 대 서버로 다시 확인(승인)한 뒤에만 크레딧을 준다
 app.get("/payment/success", async (req, res) => {
   const { paymentKey, orderId, amount } = req.query;
-  const orders = loadOrders();
-  const order = orders[orderId];
+  const order = db.getOrder(orderId);
 
   if (!order || order.status !== "pending" || String(order.amount) !== String(amount)) {
     return res.status(400).send("<h1>결제 확인 실패</h1><p>주문 정보가 일치하지 않습니다.</p><a href='/'>돌아가기</a>");
@@ -837,15 +876,12 @@ app.get("/payment/success", async (req, res) => {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.message || "결제 승인 실패");
 
-    order.status = "paid";
-    saveOrders(orders);
+    db.markOrderPaid(orderId);
 
-    const users = loadUsers();
-    const rec = users[order.userId];
+    const rec = db.getUserById(order.user_id);
     if (rec) {
-      rec.credits = (rec.credits || 0) + order.credits;
-      rec.ceiling = rec.credits;
-      saveUsers(users);
+      const credits = (rec.credits || 0) + order.credits;
+      db.updateCredits(rec.id, credits, credits);
     }
     res.redirect("/?payment=success");
   } catch (e) {
@@ -867,12 +903,8 @@ app.post("/api/company", (req, res) => {
   if (logo && !/^data:image\/(png|jpe?g|webp);base64,/.test(logo)) logo = "";
   if (logo.length > 900000) return res.status(400).json({ error: "로고 이미지 용량이 너무 큽니다." });
 
-  const users = loadUsers();
-  const rec = users[u.id];
-  if (!rec) return res.status(401).json({ error: "로그인이 필요합니다." });
-  rec.company = { name, logo };
-  saveUsers(users);
-  res.json({ ok: true, user: publicUser(rec) });
+  db.updateCompany(u.id, name, logo);
+  res.json({ ok: true, user: publicUser(db.getUserById(u.id)) });
 });
 
 /* ══════════════════════════════════════════════════════════════
@@ -886,17 +918,20 @@ app.post("/api/social/connect", (req, res) => {
   const { igUserId, accessToken, commentKeyword, dmMessage } = req.body || {};
   if (!igUserId || !accessToken) return res.status(400).json({ error: "igUserId와 accessToken이 필요합니다." });
 
-  const users = loadUsers();
-  const rec = users[u.id];
-  rec.social = rec.social || {};
-  rec.social.instagram = {
-    igUserId: String(igUserId),
-    accessToken: String(accessToken),
-    commentKeyword: String(commentKeyword || "정보"),
-    dmMessage: String(dmMessage || "안녕하세요! 요청하신 링크 보내드려요 🙌"),
-  };
-  saveUsers(users);
-  res.json({ ok: true, connected: true });
+  try {
+    db.setSocialInstagram(u.id, {
+      igUserId: String(igUserId),
+      accessTokenEnc: encryptSecret(String(accessToken)), // 평문 저장 금지 — 파일 유출 시 계정 탈취 방지
+      commentKeyword: String(commentKeyword || "정보"),
+      dmMessage: String(dmMessage || "안녕하세요! 요청하신 링크 보내드려요 🙌"),
+    });
+    res.json({ ok: true, connected: true });
+  } catch (e) {
+    if (String(e.message).includes("UNIQUE")) {
+      return res.status(409).json({ error: "이 인스타그램 계정은 이미 다른 계정에 연결되어 있습니다." });
+    }
+    res.status(500).json({ error: "연결 저장에 실패했습니다: " + e.message });
+  }
 });
 
 // 2) 상품 정보로 카드뉴스 3장 생성 → 공개 URL 반환 (여기까진 대표님 승인 없이 바로 확인 가능)
@@ -906,16 +941,14 @@ app.post("/api/social/cardnews", async (req, res) => {
   const p = req.body || {};
   if (!p.name || !p.hook) return res.status(400).json({ error: "name, hook은 필수입니다." });
 
-  const usersCheck = loadUsers();
-  if ((usersCheck[u.id].credits || 0) < COST_CARDNEWS) {
+  if ((u.credits || 0) < COST_CARDNEWS) {
     return res.status(402).json({ error: "크레딧이 부족합니다. 충전 후 다시 시도해 주세요." });
   }
 
   try {
     const jobId = crypto.randomBytes(6).toString("hex");
     const outDir = path.join(__dirname, "public", "cardnews", jobId);
-    const users = loadUsers();
-    const social = (users[u.id] && users[u.id].social && users[u.id].social.instagram) || {};
+    const social = (u.social && u.social.instagram) || {};
 
     await generateCardNews(
       {
@@ -936,17 +969,12 @@ app.post("/api/social/cardnews", async (req, res) => {
     const base = `${req.protocol}://${req.get("host")}`;
     const urls = ["slide1.png", "slide2.png", "slide3.png"].map((f) => `${base}/cardnews/${jobId}/${f}`);
 
-    const fresh = loadUsers();
-    const rec = fresh[u.id];
-    rec.credits = Math.max(0, (rec.credits || 0) - COST_CARDNEWS);
-    rec.usage = rec.usage || [];
-    rec.usage.push({ at: nowKR(), amount: COST_CARDNEWS, kind: "카드뉴스 생성", label: p.name });
-    if (rec.usage.length > 60) rec.usage = rec.usage.slice(-60);
-    rec.cardnewsHistory = rec.cardnewsHistory || [];
-    rec.cardnewsHistory.push({ jobId, name: p.name, hook: p.hook, imageUrls: urls, createdAt: nowKR() });
-    saveUsers(fresh);
+    const credits = Math.max(0, (u.credits || 0) - COST_CARDNEWS);
+    db.updateCredits(u.id, credits, u.ceiling);
+    db.addUsage(u.id, { at: nowKR(), amount: COST_CARDNEWS, kind: "카드뉴스 생성", label: p.name });
+    db.addCardnewsHistory(u.id, { jobId, name: p.name, hook: p.hook, imageUrls: urls, createdAt: nowKR() });
 
-    res.json({ ok: true, jobId, imageUrls: urls, user: publicUser(rec) });
+    res.json({ ok: true, jobId, imageUrls: urls, user: publicUser(db.getUserById(u.id)) });
   } catch (e) {
     res.status(500).json({ error: "카드뉴스 생성 실패: " + e.message });
   }
@@ -959,12 +987,12 @@ app.post("/api/social/publish", async (req, res) => {
   const { imageUrls, caption } = req.body || {};
   if (!Array.isArray(imageUrls) || !imageUrls.length) return res.status(400).json({ error: "imageUrls가 필요합니다." });
 
-  const users = loadUsers();
-  const social = users[u.id] && users[u.id].social && users[u.id].social.instagram;
+  const social = u.social && u.social.instagram;
   if (!social) return res.status(400).json({ error: "먼저 /api/social/connect로 인스타그램 계정을 연결해 주세요." });
 
   try {
-    const result = await publishCarouselPost(social.igUserId, social.accessToken, imageUrls, caption || "");
+    const accessToken = decryptSecret(social.accessTokenEnc);
+    const result = await publishCarouselPost(social.igUserId, accessToken, imageUrls, caption || "");
     res.json({ ok: true, result });
   } catch (e) {
     res.status(500).json({ error: "게시 실패: " + e.message });
@@ -982,16 +1010,12 @@ app.post("/webhooks/instagram", async (req, res) => {
   res.sendStatus(200); // 메타는 빠른 200 응답을 기대하므로 먼저 응답하고 뒤에서 처리
   try {
     const igUserId = req.body?.entry?.[0]?.id;
-    const users = loadUsers();
-    const match = Object.values(users).find(
-      (x) => x.social && x.social.instagram && x.social.instagram.igUserId === igUserId
-    );
-    if (!match) return;
-    const social = match.social.instagram;
+    const social = db.getSocialInstagramByIgUserId(igUserId);
+    if (!social) return;
     await handleCommentWebhook(req.body, {
       keyword: social.commentKeyword,
       replyMessage: social.dmMessage,
-      accessToken: social.accessToken,
+      accessToken: decryptSecret(social.accessTokenEnc),
     });
   } catch (e) {
     console.error("웹훅 처리 오류:", e.message);
@@ -1054,10 +1078,7 @@ app.post("/api/feedback", (req, res) => {
   if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
   const rating = String((req.body && req.body.rating) || "");
   if (rating !== "up" && rating !== "down") return res.status(400).json({ error: "잘못된 값입니다." });
-  const fb = loadJSONFile("feedback.json", []);
-  fb.push({ userId: u.id, jobId: String((req.body && req.body.jobId) || ""), rating, at: nowKR() });
-  if (fb.length > 500) fb.splice(0, fb.length - 500);
-  saveJSONFile("feedback.json", fb);
+  db.addFeedback({ userId: u.id, jobId: String((req.body && req.body.jobId) || ""), rating, at: nowKR() });
   res.json({ ok: true });
 });
 
@@ -1083,8 +1104,7 @@ app.get("/api/knowledge/:role", (req, res) => {
   const u = currentUser(req);
   if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
   if (!SPECIALISTS[req.params.role] && req.params.role !== BRAND_KEY) return res.status(400).json({ error: "알 수 없는 담당자입니다." });
-  const kb = loadJSONFile("knowledge.json", {});
-  res.json({ items: (kb[u.id] && kb[u.id][req.params.role]) || [] });
+  res.json({ items: db.getKnowledge(u.id, req.params.role) });
 });
 
 app.post("/api/knowledge/:role", (req, res) => {
@@ -1097,15 +1117,11 @@ app.post("/api/knowledge/:role", (req, res) => {
   if (!text) return res.status(400).json({ error: "내용을 입력해 주세요." });
   if (text.length > 20000) return res.status(400).json({ error: "자료가 너무 깁니다. 20000자 이내로 줄여 주세요." });
 
-  const kb = loadJSONFile("knowledge.json", {});
-  if (!kb[u.id]) kb[u.id] = {};
-  if (!kb[u.id][role]) kb[u.id][role] = [];
-  kb[u.id][role].push({
+  db.addKnowledge(u.id, role, {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     title, text, addedAt: nowKR(),
   });
-  saveJSONFile("knowledge.json", kb);
-  res.json({ ok: true, items: kb[u.id][role] });
+  res.json({ ok: true, items: db.getKnowledge(u.id, role) });
 });
 
 app.delete("/api/knowledge/:role/:id", (req, res) => {
@@ -1113,10 +1129,8 @@ app.delete("/api/knowledge/:role/:id", (req, res) => {
   if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
   const role = req.params.role;
   if (!SPECIALISTS[role] && role !== BRAND_KEY) return res.status(400).json({ error: "알 수 없는 담당자입니다." });
-  const kb = loadJSONFile("knowledge.json", {});
-  if (kb[u.id] && kb[u.id][role]) kb[u.id][role] = kb[u.id][role].filter((k) => k.id !== req.params.id);
-  saveJSONFile("knowledge.json", kb);
-  res.json({ ok: true, items: (kb[u.id] && kb[u.id][role]) || [] });
+  db.deleteKnowledge(u.id, role, req.params.id);
+  res.json({ ok: true, items: db.getKnowledge(u.id, role) });
 });
 
 const PORT = process.env.PORT || 3000;

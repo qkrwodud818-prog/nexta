@@ -696,6 +696,30 @@
 </div>
 
 <script>
+/* ══════ CSRF 보호 — 로그인 시 서버가 내려준 vo_csrf 쿠키 값을 모든 상태변경 요청 헤더에 자동으로 실어 보낸다 ══════ */
+(function(){
+  function getCookie(name){
+    var m = document.cookie.match(new RegExp('(?:^|; )'+name+'=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  var origFetch = window.fetch.bind(window);
+  window.fetch = function(input, init){
+    init = init || {};
+    var method = (init.method || 'GET').toUpperCase();
+    if(method !== 'GET' && method !== 'HEAD'){
+      var token = getCookie('vo_csrf');
+      if(token){
+        init.headers = init.headers instanceof Headers
+          ? init.headers
+          : Object.assign({}, init.headers || {});
+        if(init.headers instanceof Headers) init.headers.set('X-CSRF-Token', token);
+        else init.headers['X-CSRF-Token'] = token;
+      }
+    }
+    return origFetch(input, init);
+  };
+})();
+
 /* ══════ 직원 정보 ══════ */
 var CREW = [
   { name:'전략기획', role:'전략기획 담당',        color:'#2563eb', sprite:'b', desc:'사업 방향·신규 아이템·성장 전략을 조사하고 제안해요.' },

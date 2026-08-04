@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "description": "AI 직원팀 - OpenRouter TOP5 모델 라우팅 기반 4단계 검증 워크플로우",
   "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.2",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "sharp": "^0.35.3"
