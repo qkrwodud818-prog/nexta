@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>넥스타 — 관리자</title>
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  :root{ --ink:#1a1a2e; --soft:#6b7280; --line:#e5e7eb; --bg:#f7f8fa; --purple:#7c3aed; --green:#16a34a; --red:#dc2626; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap{ max-width:1100px; margin:0 auto; padding:32px 20px 80px; }
+  h1{ font-size:22px; font-weight:800; margin:0 0 4px; }
+  .sub{ color:var(--soft); font-size:13px; margin-bottom:24px; }
+  .gate{ max-width:360px; margin:120px auto; background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px; text-align:center; }
+  .gate input{ width:100%; padding:11px 13px; border:1px solid var(--line); border-radius:10px; font-size:14px; margin:14px 0; font-family:inherit; }
+  .gate button{ width:100%; padding:11px; border:none; border-radius:10px; background:var(--purple); color:#fff; font-weight:700; font-size:14px; cursor:pointer; }
+  .gate .err{ color:var(--red); font-size:12.5px; margin-top:8px; min-height:16px; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:24px; }
+  .stat{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px; }
+  .stat .num{ font-size:26px; font-weight:800; }
+  .stat .lbl{ font-size:12.5px; color:var(--soft); margin-top:2px; }
+  .card{ background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:20px; }
+  .card h2{ font-size:15px; font-weight:800; margin:0 0 14px; }
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th,td{ text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th{ color:var(--soft); font-weight:700; font-size:12px; }
+  tr:last-child td{ border-bottom:none; }
+  .badge{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:11.5px; font-weight:700; }
+  .b-approved{ background:#dcfce7; color:#15803d; }
+  .b-error{ background:#fee2e2; color:#b91c1c; }
+  .b-abandoned{ background:#fef3c7; color:#b45309; }
+  .b-started, .b-awaiting_approval{ background:#e0e7ff; color:#4338ca; }
+  .bar-row{ display:flex; align-items:center; gap:10px; margin:6px 0; font-size:12.5px; }
+  .bar-track{ flex:1; height:8px; background:var(--bg); border-radius:99px; overflow:hidden; }
+  .bar-fill{ height:100%; background:var(--purple); border-radius:99px; }
+  .empty{ color:var(--soft); font-size:13px; padding:12px 0; }
+  .refform{ display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+  .refform input{ padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13px; font-family:inherit; }
+  .refform button{ padding:9px 16px; border:none; border-radius:8px; background:var(--ink); color:#fff; font-weight:700; font-size:13px; cursor:pointer; }
+  .refresh{ float:right; padding:7px 14px; border:1px solid var(--line); border-radius:8px; background:#fff; font-size:12.5px; cursor:pointer; }
+  .qtext{ max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+</style>
+</head>
+<body>
+
+<div id="gate" class="gate">
+  <h1>🔐 넥스타 관리자</h1>
+  <p class="sub">ADMIN_KEY를 입력하세요</p>
+  <input id="keyInput" type="password" placeholder="ADMIN_KEY">
+  <button id="enterBtn">들어가기</button>
+  <div class="err" id="gateErr"></div>
+</div>
+
+<div id="dash" class="wrap" style="display:none;">
+  <h1>넥스타 관리자 대시보드</h1>
+  <p class="sub">API 키는 노출되지 않습니다 — 이 화면은 회원·업무·매출 요약 정보만 보여줍니다. <button class="refresh" id="refreshBtn">새로고침</button></p>
+
+  <div class="grid" id="userStats"></div>
+
+  <div class="card">
+    <h2>업무 진행 현황 (어디서 이탈하는지)</h2>
+    <div id="jobStats"></div>
+  </div>
+
+  <div class="card">
+    <h2>담당자(역할)별 선택 빈도 — 실질적인 "질문 유형"</h2>
+    <div id="agentPop"></div>
+  </div>
+
+  <div class="card">
+    <h2>최근 질문 30건</h2>
+    <table id="questionsTable"><thead><tr><th>시간</th><th>질문</th><th>상태</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>만족도 피드백</h2>
+    <div id="feedbackStats"></div>
+  </div>
+
+  <div class="card">
+    <h2>AI 호출 원가 (역할별 누적, 달러)</h2>
+    <table id="costTable"><thead><tr><th>역할</th><th>호출 수</th><th>누적 비용</th><th>평균</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>인플루언서 추천 코드</h2>
+    <div class="refform">
+      <input id="refCode" placeholder="코드 (영문/숫자, 예: yuchan)">
+      <input id="refLabel" placeholder="메모 (예: 이유찬 유튜브)">
+      <button id="refAddBtn">코드 발급</button>
+    </div>
+    <div id="refErr" style="color:var(--red);font-size:12.5px;margin-bottom:10px;"></div>
+    <table id="refTable"><thead><tr><th>코드</th><th>메모</th><th>가입자</th><th>결제 전환</th><th>결제액</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>최근 가입 회원 20명</h2>
+    <table id="signupsTable"><thead><tr><th>이메일</th><th>구분</th><th>크레딧</th></tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<script>
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+var ADMIN_KEY = sessionStorage.getItem('nexta_admin_key') || '';
+
+function statusLabel(s){
+  return { started:'시작됨', awaiting_approval:'검토 대기', approved:'완료(승인)', abandoned:'중도 포기', error:'오류' }[s] || s;
+}
+
+function loadDashboard(){
+  fetch('/api/admin/dashboard?key=' + encodeURIComponent(ADMIN_KEY))
+    .then(function(r){ if(!r.ok) throw new Error('키가 맞지 않거나 서버 오류입니다.'); return r.json(); })
+    .then(renderDashboard)
+    .catch(function(e){
+      document.getElementById('gate').style.display='block';
+      document.getElementById('dash').style.display='none';
+      document.getElementById('gateErr').textContent = e.message;
+    });
+}
+
+function renderDashboard(d){
+  document.getElementById('gate').style.display='none';
+  document.getElementById('dash').style.display='block';
+
+  // 회원 현황
+  var u = d.users;
+  document.getElementById('userStats').innerHTML =
+    '<div class="stat"><div class="num">'+u.total+'</div><div class="lbl">전체 회원</div></div>'
+    + '<div class="stat"><div class="num">'+u.real+'</div><div class="lbl">정회원(가입)</div></div>'
+    + '<div class="stat"><div class="num">'+u.guests+'</div><div class="lbl">체험(게스트)</div></div>'
+    + '<div class="stat"><div class="num">'+u.paidUsers+'</div><div class="lbl">결제 전환</div></div>';
+
+  // 업무 현황
+  var jobBox = document.getElementById('jobStats');
+  if(!d.jobStats.length){ jobBox.innerHTML = '<div class="empty">아직 기록된 업무가 없어요.</div>'; }
+  else {
+    var total = d.jobStats.reduce(function(a,r){return a+r.count;},0);
+    jobBox.innerHTML = d.jobStats.map(function(r){
+      var pct = Math.round(r.count/total*100);
+      return '<div class="bar-row"><span style="width:90px;"><span class="badge b-'+r.status+'">'+statusLabel(r.status)+'</span></span>'
+        + '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;"></div></div>'
+        + '<span style="width:70px;text-align:right;">'+r.count+'건 ('+pct+'%)</span></div>';
+    }).join('');
+  }
+
+  // 담당자 인기도
+  var agentBox = document.getElementById('agentPop');
+  if(!d.agentPopularity.length){ agentBox.innerHTML = '<div class="empty">아직 데이터가 없어요.</div>'; }
+  else {
+    var max = d.agentPopularity[0].count;
+    agentBox.innerHTML = d.agentPopularity.map(function(r){
+      var pct = Math.round(r.count/max*100);
+      return '<div class="bar-row"><span style="width:90px;">'+esc(r.agent)+'</span>'
+        + '<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;"></div></div>'
+        + '<span style="width:50px;text-align:right;">'+r.count+'회</span></div>';
+    }).join('');
+  }
+
+  // 최근 질문
+  var qBody = document.querySelector('#questionsTable tbody');
+  qBody.innerHTML = d.recentQuestions.length ? d.recentQuestions.map(function(q){
+    return '<tr><td>'+esc((q.created_at||'').slice(11,16))+'</td>'
+      + '<td class="qtext" title="'+esc(q.question||'')+'">'+esc(q.question||'')+'</td>'
+      + '<td><span class="badge b-'+q.status+'">'+statusLabel(q.status)+'</span>'
+      + (q.error_message ? ' <span style="color:var(--soft);font-size:11.5px;">'+esc(q.error_message)+'</span>' : '')
+      + '</td></tr>';
+  }).join('') : '<tr><td colspan="3" class="empty">아직 없어요.</td></tr>';
+
+  // 피드백
+  var fb = {}; d.feedback.forEach(function(r){ fb[r.rating]=r.count; });
+  document.getElementById('feedbackStats').innerHTML =
+    '👍 좋아요 <b>'+(fb.up||0)+'</b>건 &nbsp;&nbsp; 👎 아쉬워요 <b>'+(fb.down||0)+'</b>건';
+
+  // 원가
+  var costBody = document.querySelector('#costTable tbody');
+  costBody.innerHTML = d.costByRole.length ? d.costByRole.map(function(r){
+    return '<tr><td>'+esc(r.role_key)+'</td><td>'+r.calls+'</td><td>$'+Number(r.total_cost_usd||0).toFixed(4)+'</td><td>$'+Number(r.avg_cost_usd||0).toFixed(4)+'</td></tr>';
+  }).join('') : '<tr><td colspan="4" class="empty">아직 없어요.</td></tr>';
+
+  // 추천 코드
+  renderReferrals(d.referrals);
+
+  // 최근 가입
+  var sBody = document.querySelector('#signupsTable tbody');
+  sBody.innerHTML = d.recentSignups.length ? d.recentSignups.map(function(s){
+    return '<tr><td>'+esc(s.email)+'</td><td>'+(s.guest?'체험':'정회원')+'</td><td>'+s.credits+'</td></tr>';
+  }).join('') : '<tr><td colspan="3" class="empty">아직 없어요.</td></tr>';
+}
+
+function renderReferrals(list){
+  var body = document.querySelector('#refTable tbody');
+  body.innerHTML = list.length ? list.map(function(r){
+    return '<tr><td>'+esc(r.code)+'</td><td>'+esc(r.label||'')+'</td><td>'+r.signups+'</td><td>'+r.paid_conversions+'</td><td>'+Number(r.paid_amount_krw||0).toLocaleString()+'원</td></tr>';
+  }).join('') : '<tr><td colspan="5" class="empty">아직 발급한 코드가 없어요.</td></tr>';
+}
+
+document.getElementById('enterBtn').onclick = function(){
+  ADMIN_KEY = document.getElementById('keyInput').value.trim();
+  if(!ADMIN_KEY){ return; }
+  sessionStorage.setItem('nexta_admin_key', ADMIN_KEY);
+  loadDashboard();
+};
+document.getElementById('keyInput').addEventListener('keydown', function(e){ if(e.key==='Enter') document.getElementById('enterBtn').click(); });
+document.getElementById('refreshBtn').onclick = loadDashboard;
+document.getElementById('refAddBtn').onclick = function(){
+  var code = document.getElementById('refCode').value.trim();
+  var label = document.getElementById('refLabel').value.trim();
+  var errEl = document.getElementById('refErr');
+  errEl.textContent = '';
+  fetch('/api/admin/referrals?key=' + encodeURIComponent(ADMIN_KEY), {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ code: code, label: label })
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+  .then(function(res){
+    if(!res.ok){ errEl.textContent = res.d.error || '실패했습니다.'; return; }
+    document.getElementById('refCode').value=''; document.getElementById('refLabel').value='';
+    loadDashboard();
+  });
+};
+
+if(ADMIN_KEY) loadDashboard();
+</script>
+</body>
+</html>

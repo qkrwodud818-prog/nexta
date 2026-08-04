@@ -28,10 +28,6 @@
                 radial-gradient(ellipse at 20% 80%, rgba(20,60,100,.4) 0%, transparent 60%); }
   .landing-nav { position:relative; z-index:10; display:flex; align-items:center; padding:20px 48px; }
   .nav-logo { color:#fff; font-size:26px; font-weight:800; letter-spacing:-1px; margin-right:auto; }
-  .nav-menu { display:flex; gap:8px; align-items:center; margin-right:32px; }
-  .nav-menu a { color:rgba(255,255,255,.85); font-size:14px; text-decoration:none; display:flex; align-items:center; gap:3px; padding:6px 10px; border-radius:6px; }
-  .nav-menu a:hover { background:rgba(255,255,255,.1); }
-  .nav-menu a::after { content:'▾'; font-size:10px; opacity:.7; }
   .nav-actions { display:flex; align-items:center; gap:16px; }
   .nav-login { color:rgba(255,255,255,.85); font-size:14px; cursor:pointer; }
   .btn-pill { background:var(--purple); color:#fff; border:none; border-radius:999px; padding:10px 22px;
@@ -47,7 +43,7 @@
   .hero-right .glowbg{ position:absolute; bottom:20px; width:260px; height:260px; border-radius:50%;
     background:radial-gradient(closest-side, rgba(124,58,237,.55), transparent 70%); filter:blur(8px); }
   .hero-right img{ position:relative; width:270px; filter:drop-shadow(0 20px 30px rgba(0,0,0,.5)); }
-  @media(max-width:820px){ .hero-right{display:none;} .nav-menu{display:none;} }
+  @media(max-width:820px){ .hero-right{display:none;} }
 
   /* ══════ APP LAYOUT ══════ */
   .app-layout { flex-direction:row; overflow:hidden; }
@@ -364,6 +360,11 @@
 
   /* ══════ SCREEN 5 — 카드뉴스 자동생성 ══════ */
   #screen5 .main-content{ background:var(--bg); }
+  .cn-auto-box{ background:#fff; border:1px solid var(--line); border-radius:16px; padding:20px; margin-bottom:24px; }
+  .cn-bookmarklet-btn{ display:inline-block; padding:10px 18px; border-radius:999px; background:var(--purple);
+    color:#fff; font-weight:700; font-size:13.5px; text-decoration:none; cursor:grab; user-select:none; }
+  .cn-auto-progress-step{ font-size:12.5px; padding:6px 0; border-bottom:1px solid var(--line); }
+  .cn-auto-progress-step:last-child{ border-bottom:none; }
   .cn-layout{ display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
   .cn-form{ flex:1 1 380px; min-width:320px; background:#fff; border:1px solid var(--line); border-radius:16px; padding:20px; }
   .cn-form label{ display:block; font-size:13px; font-weight:700; margin:14px 0 6px; }
@@ -418,9 +419,6 @@
 <div id="screen1" class="screen active">
   <nav class="landing-nav">
     <div class="nav-logo">NEXTA</div>
-    <nav class="nav-menu">
-      <a href="#">제품</a><a href="#">기능</a><a href="#">요금</a><a href="#">자료실</a><a href="#">채용</a>
-    </nav>
     <div class="nav-actions">
       <span class="nav-login" onclick="enterApp()">로그인</span>
       <button class="btn-pill" onclick="enterApp()">시작하기</button>
@@ -580,6 +578,45 @@
       <button class="btn-sm" onclick="goTo('screen2')">← 홈</button>
     </div>
     <p style="font-size:13px;color:var(--soft);margin-bottom:20px;">상품 정보만 넣으면 인스타그램용 카드뉴스 3장(후킹·정보·CTA)을 자동으로 만들어드려요. 완성되면 다운로드해서 바로 게시하실 수 있어요.</p>
+
+    <div class="cn-auto-box">
+      <div class="section-title">🔖 쿠팡 상품 자동 가져오기 + 자동 업로드</div>
+      <p style="font-size:12.5px;color:var(--soft);margin:4px 0 10px;">
+        아래 <b>버튼을 즐겨찾기(북마크) 바로 드래그</b>해서 등록해 두세요.
+        쿠팡에서 팔고 싶은 상품 페이지를 열어놓은 상태에서 그 버튼을 누르면,
+        타이핑 없이 상품명·가격·사진이 자동으로 이 화면에 채워집니다.
+      </p>
+      <a id="cnBookmarklet" class="cn-bookmarklet-btn" href="#" onclick="return false;">📌 넥스타로 가져오기</a>
+      <span style="font-size:12px;color:var(--soft);margin-left:8px;">↑ 이 버튼을 즐겨찾기 바로 드래그하세요 (클릭 X)</span>
+
+      <div id="cnImportStatus" style="display:none;margin-top:14px;padding:12px;border-radius:10px;background:var(--bg);">
+        <div style="font-size:13px;font-weight:700;margin-bottom:6px;">가져온 상품</div>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <img id="cnImportImg" src="" alt="" style="width:52px;height:52px;object-fit:cover;border-radius:8px;background:#eee;">
+          <div style="flex:1;">
+            <div id="cnImportName" style="font-size:13.5px;font-weight:600;"></div>
+            <div id="cnImportPrice" style="font-size:12.5px;color:var(--soft);"></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
+          <select id="cnCategory" style="flex:1;min-width:140px;padding:9px;border-radius:8px;border:1px solid var(--line);">
+            <option value="">카테고리 선택</option>
+            <option>여성패션</option><option>남성패션</option><option>뷰티</option>
+            <option>출산/유아동</option><option>식품</option><option>주방용품</option>
+            <option>생활/건강</option><option>홈인테리어</option><option>디지털/가전</option>
+            <option>스포츠/레저</option>
+          </select>
+          <input id="cnQty" type="number" min="1" max="5" value="3" style="width:80px;padding:9px;border-radius:8px;border:1px solid var(--line);" title="만들 카드뉴스 개수 (문구만 다르게, 최대 5개)">
+        </div>
+        <label style="display:flex;align-items:center;gap:7px;margin-top:12px;font-size:12.5px;font-weight:400;color:var(--soft);cursor:pointer;">
+          <input type="checkbox" id="cnPromoToggle" checked style="width:auto;margin:0;">
+          자동 게시 캡션에 "AI 직원팀이 만들었어요" 문구 포함하기
+        </label>
+        <button class="cn-genbtn" id="cnAutoBtn" style="margin-top:10px;">🚀 자동 생성 + 인스타그램 자동 업로드</button>
+        <div class="cn-cost">문구 <b id="cnAutoCostShow">3</b>개 × <b>30</b>크레딧 = <b id="cnAutoCostTotal">90</b> 크레딧 차감돼요. 생성되는 즉시 인스타그램에 자동 게시됩니다.</div>
+      </div>
+      <div id="cnAutoProgress" style="display:none;margin-top:14px;"></div>
+    </div>
 
     <div class="cn-layout">
       <div class="cn-form">
@@ -976,6 +1013,8 @@ function renderCredits(user){
   else if(pct<=20){ warn.textContent='곧 소진돼요'; warn.className='warn'; }
   else { warn.textContent=''; warn.className='warn'; }
   renderCompanyBrand(user.company);
+  var promoToggle = document.getElementById('cnPromoToggle');
+  if(promoToggle) promoToggle.checked = !user.promoOptout;
   if(typeof renderCardnewsHistory === 'function') renderCardnewsHistory();
 }
 
@@ -1472,6 +1511,99 @@ document.getElementById('cnGenBtn').onclick = function(){
   .finally(function(){ btn.disabled=false; btn.textContent='카드뉴스 생성하기'; });
 };
 
+/* ══════ 쿠팡 상품 북마클릿 가져오기 + 자동 생성/업로드 ══════
+   원리: 서버가 쿠팡에 직접 접속하면 차단되므로(Access Denied), 대신 대표님이 쿠팡 상품
+   페이지를 "직접 보고 있는 브라우저"에서 실행되는 북마클릿이 그 페이지의 상품명·가격·
+   사진을 읽어서 새 탭으로 넥스타를 열며 값을 넘겨준다(?bm_import=...). 서버는 이 값을
+   전혀 스크래핑하지 않는다 — 브라우저가 이미 읽은 값을 받기만 한다. */
+(function setupBookmarklet(){
+  var origin = location.origin;
+  var code = "(function(){"
+    + "function m(p){var e=document.querySelector('meta[property=\"'+p+'\"]')||document.querySelector('meta[name=\"'+p+'\"]');return e?e.content:'';}"
+    + "var name=m('og:title')||document.title||'';"
+    + "var image=m('og:image')||'';"
+    + "var price='';"
+    + "try{"
+    + "var el=document.querySelector('.total-price strong')||document.querySelector('.prod-price .total-price')||document.querySelector('[class*=price] strong');"
+    + "if(el)price=el.textContent.replace(/[^0-9]/g,'');"
+    + "if(!price){var t=document.body.innerText.match(/([0-9]{1,3}(,[0-9]{3})+)\\s*원/);if(t)price=t[1].replace(/,/g,'');}"
+    + "}catch(e){}"
+    + "var data={name:name,image:image,price:price,url:location.href};"
+    + "var enc=encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(data)))));"
+    + "window.open('" + origin + "/?bm_import='+enc,'_blank');"
+    + "})();";
+  var a = document.getElementById('cnBookmarklet');
+  if(a) a.setAttribute('href', 'javascript:' + code);
+})();
+
+function applyBookmarkletImport(){
+  var qs = new URLSearchParams(location.search);
+  var raw = qs.get('bm_import');
+  if(!raw) return;
+  history.replaceState(null,'',location.pathname);
+  try{
+    var json = decodeURIComponent(escape(atob(decodeURIComponent(raw))));
+    var data = JSON.parse(json);
+    document.getElementById('cnImportStatus').style.display = 'block';
+    document.getElementById('cnImportImg').src = data.image || '';
+    document.getElementById('cnImportName').textContent = data.name || '(상품명을 못 읽었어요)';
+    document.getElementById('cnImportPrice').textContent = data.price ? (Number(data.price).toLocaleString()+'원') : '가격을 못 읽었어요 — 직접 확인해 주세요';
+    document.getElementById('cnImportStatus').dataset.name = data.name || '';
+    document.getElementById('cnImportStatus').dataset.price = data.price || '';
+    document.getElementById('cnImportStatus').dataset.image = data.image || '';
+    goTo('screen5');
+  }catch(e){ /* 잘못된 값이면 조용히 무시 */ }
+}
+document.getElementById('cnQty').addEventListener('input', function(){
+  var q = Math.max(1, Math.min(5, parseInt(this.value,10)||1));
+  document.getElementById('cnAutoCostShow').textContent = q;
+  document.getElementById('cnAutoCostTotal').textContent = q*30;
+});
+document.getElementById('cnPromoToggle').addEventListener('change', function(){
+  fetch('/api/settings/promo',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ optout: !this.checked })})
+  .then(function(r){ return r.json(); })
+  .then(function(d){ if(d.user){ me = d.user; } });
+});
+document.getElementById('cnAutoBtn').onclick = function(){
+  var box = document.getElementById('cnImportStatus');
+  var name = box.dataset.name, price = box.dataset.price, image = box.dataset.image;
+  var category = document.getElementById('cnCategory').value;
+  var qty = Math.max(1, Math.min(5, parseInt(document.getElementById('cnQty').value,10)||1));
+  if(!category){ alert('카테고리를 선택해 주세요.'); return; }
+  var progress = document.getElementById('cnAutoProgress');
+  progress.style.display='block'; progress.innerHTML='';
+  var btn = this; btn.disabled = true; btn.textContent = '진행 중...';
+
+  fetch('/api/social/coupang-auto',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ name:name, price:price, imageUrl:image, category:category, quantity:qty, commentKeyword:'정보' })})
+  .then(function(r){ return r.json().then(function(d){ return {status:r.status, d:d}; }); })
+  .then(function(res){
+    if(res.status===401){ document.getElementById('authOverlay').classList.add('show'); return; }
+    if(res.status===402){ alert('크레딧이 부족합니다. 충전 후 다시 시도해 주세요.'); document.getElementById('topupOverlay').classList.add('open'); return; }
+    if(res.d.error) throw new Error(res.d.error);
+    var src = new EventSource('/api/stream/' + res.d.jobId);
+    src.onmessage = function(m){
+      var ev; try{ ev = JSON.parse(m.data); }catch(e){ return; }
+      if(ev.type==='status' || ev.type==='step'){
+        var line = document.createElement('div'); line.className='cn-auto-progress-step';
+        line.textContent = (ev.time?'['+ev.time+'] ':'') + (ev.text || ev.label || '');
+        progress.appendChild(line);
+      } else if(ev.type==='credit'){ if(me){ me.credits = ev.credits; renderCredits(me); } }
+      else if(ev.type==='approved'){
+        var done = document.createElement('div'); done.className='cn-auto-progress-step'; done.style.fontWeight='700';
+        done.textContent = '✅ ' + ev.text; progress.appendChild(done);
+        renderCardnewsHistory();
+      } else if(ev.type==='error'){
+        var err = document.createElement('div'); err.className='cn-auto-progress-step err'; err.textContent = '❌ ' + ev.text;
+        progress.appendChild(err);
+      } else if(ev.type==='done'){ src.close(); btn.disabled=false; btn.textContent='🚀 자동 생성 + 인스타그램 자동 업로드'; }
+    };
+    src.onerror = function(){ if(src.readyState===2){ btn.disabled=false; btn.textContent='🚀 자동 생성 + 인스타그램 자동 업로드'; } };
+  })
+  .catch(function(e){ alert('시작하지 못했습니다: '+e.message); btn.disabled=false; btn.textContent='🚀 자동 생성 + 인스타그램 자동 업로드'; });
+};
+
 /* ══════ 실제 결제 (토스페이먼츠) ══════ */
 var payConfig = { enabled:false, packages:{} };
 function loadPaymentConfig(){
@@ -1582,6 +1714,7 @@ function checkAuth(){
     .then(function(d){
       COST.perAgent=d.costPerAgent; COST.manager=d.costManager;
       renderCredits(d.user); updateCostEst(); goTo('screen2'); maybeAskCompany(); loadPaymentConfig();
+      applyBookmarkletImport();
     })
     .catch(function(){ goTo('screen1'); });
 }

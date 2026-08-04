@@ -9,9 +9,32 @@ const path = require("path");
 
 const W = 1080, H = 1350;
 const FONT = "Noto Sans CJK KR"; // 서버에 이 폰트가 설치돼 있어야 함 (아래 README 참고)
+// 결과물 자체가 광고가 되게(바이럴 성장 전략 1번) — 카드뉴스마다 작게 출처를 남긴다.
+// 도메인이 바뀌면 .env의 SITE_URL만 바꾸면 된다(코드 수정 불필요).
+const SITE_URL = process.env.SITE_URL || "nexta-yhy8.onrender.com";
 
 function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// color1/color2는 요청 본문에서 그대로 들어오는 값이라, 검증 없이 SVG 속성에 넣으면
+// 따옴표를 깨고 임의의 SVG 태그를 주입할 수 있다(XML 인젝션). #rgb/#rrggbb 형식만 허용한다.
+function safeHexColor(v, fallback) {
+  return /^#[0-9a-fA-F]{3}$|^#[0-9a-fA-F]{6}$/.test(String(v || "")) ? v : fallback;
+}
+
+// 요청에 딸려온 임의의 URL을 서버가 그대로 fetch하면, 공격자가 내부망이나 클라우드
+// 메타데이터 주소(예: 169.254.169.254)를 넣어 서버가 대신 접근하게 만들 수 있다(SSRF).
+// http(s)만 허용하고, 사설/루프백/링크로컬 주소로 보이는 호스트는 걸러낸다.
+function isSafeImageUrl(u) {
+  let parsed;
+  try { parsed = new URL(u); } catch (e) { return false; }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".local")) return false;
+  if (/^127\.|^10\.|^192\.168\.|^169\.254\.|^0\.|^::1$|^\[::1\]$/.test(host)) return false;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return false;
+  return true;
 }
 
 // 긴 줄을 여러 줄로 감싸기 (한글 기준 대략 글자수로 계산)
@@ -124,6 +147,7 @@ async function renderCtaSlide({ ctaText, commentKeyword, color1, color2 }, outPa
       <text x="${W / 2}" y="${H - 150}" font-size="24" fill="#ffffffcc" text-anchor="middle">
         ${multilineTspans(disclosure, W / 2, H - 150, 34, 34)}
       </text>
+      <text x="${W / 2}" y="${H - 30}" font-size="20" fill="#ffffff99" text-anchor="middle">Made with 넥스타 · ${esc(SITE_URL)}</text>
     </g>
   </svg>`;
   await sharp(Buffer.from(svg)).png().toFile(outPath);
@@ -140,13 +164,17 @@ async function generateCardNews(product, outDir) {
   let photoBuffer = null;
   if (product.photoBuffer) {
     photoBuffer = product.photoBuffer;
-  } else if (product.photoUrl) {
-    const res = await fetch(product.photoUrl);
-    if (res.ok) photoBuffer = Buffer.from(await res.arrayBuffer());
+  } else if (product.photoUrl && isSafeImageUrl(product.photoUrl)) {
+    try {
+      // redirect를 자동으로 따라가면 "안전해 보이는 URL"이 내부 주소로 리다이렉트하는 방식으로
+      // 위 검사를 우회할 수 있어서, 리다이렉트는 아예 따라가지 않는다(그 경우 실패 처리).
+      const res = await fetch(product.photoUrl, { redirect: "manual", signal: AbortSignal.timeout(10000) });
+      if (res.ok) photoBuffer = Buffer.from(await res.arrayBuffer());
+    } catch (e) { /* 사진을 못 가져와도 카드뉴스 자체는 계속 만든다 */ }
   }
 
-  const color1 = product.color1 || "#ff7a59";
-  const color2 = product.color2 || "#ff578c";
+  const color1 = safeHexColor(product.color1, "#ff7a59");
+  const color2 = safeHexColor(product.color2, "#ff578c");
 
   const p1 = path.join(outDir, "slide1.png");
   const p2 = path.join(outDir, "slide2.png");

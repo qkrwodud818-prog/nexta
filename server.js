@@ -25,7 +25,27 @@ const db = require("./db"); // SQLite(better-sqlite3) 기반 저장소 — data/
 
 const app = express();
 app.set("trust proxy", 1); // Render 등 프록시 뒤에서도 req.ip가 실제 접속자 IP를 가리키게 함
-app.use(express.json({ limit: "2mb" }));
+app.disable("x-powered-by"); // "Express를 쓴다"는 것 자체를 응답 헤더로 광고하지 않는다
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
+// verify 콜백으로 원본 바이트를 남겨둔다 — 인스타그램 웹훅 서명 검증에 필요(아래 참고).
+app.use(express.json({ limit: "2mb", verify: (req, res, buf) => { req.rawBody = buf; } }));
+
+// 인플루언서 추천 링크(?ref=코드)로 들어오면, 나중에 회원가입할 때 "누가 데려왔는지" 알 수 있도록
+// 90일짜리 쿠키에 코드를 기억해둔다. 등록된 코드가 아니면 무시한다(장난으로 아무 값이나 붙여도 안 남게).
+const REF_COOKIE_MAX_AGE = 60 * 60 * 24 * 90;
+app.use((req, res, next) => {
+  const ref = req.query && req.query.ref;
+  if (ref && /^[a-zA-Z0-9_-]{2,40}$/.test(ref) && db.referralCodeExists(ref)) {
+    res.setHeader("Set-Cookie", "vo_ref=" + encodeURIComponent(ref) + "; Path=/; Max-Age=" + REF_COOKIE_MAX_AGE + "; SameSite=Lax");
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, "public")));
 
 // 실제 주소. (테스트할 때만 OPENROUTER_URL 환경변수로 가짜 서버를 가리킬 수 있다)
@@ -106,6 +126,7 @@ async function callOpenRouter(model, prompt, useSearch, maxTokens) {
     model,
     messages: [{ role: "user", content: prompt }],
     max_tokens: maxTokens || 1600,
+    usage: { include: true }, // 응답에 실제 원가(달러)를 같이 받는다 — 요금제 원가율 계산용
   };
   if (useSearch) {
     body.plugins = [{ id: "web", max_results: 5 }];
@@ -141,15 +162,40 @@ async function callOpenRouter(model, prompt, useSearch, maxTokens) {
     .filter((a) => a && a.type === "url_citation" && a.url_citation)
     .map((a) => ({ url: a.url_citation.url, title: a.url_citation.title || a.url_citation.url }));
 
-  return { text: String(text).trim(), citations };
+  const usage = data.usage || {};
+  return {
+    text: String(text).trim(),
+    citations,
+    usage: {
+      promptTokens: usage.prompt_tokens != null ? usage.prompt_tokens : null,
+      completionTokens: usage.completion_tokens != null ? usage.completion_tokens : null,
+      totalTokens: usage.total_tokens != null ? usage.total_tokens : null,
+      costUsd: usage.cost != null ? usage.cost : null,
+    },
+  };
 }
 
-async function callWithFallback(config, roleKey, prompt, useSearch, maxTokens) {
+// userId/jobId/roleKey는 원가 로그에 남기기 위한 값(생략 가능 — 없으면 그냥 기록을 안 남긴다).
+async function callWithFallback(config, roleKey, prompt, useSearch, maxTokens, logCtx) {
   const candidates = resolveCandidates(config, roleKey);
   let lastError = null;
   for (const entry of candidates) {
     try {
       const result = await callOpenRouter(entry.model, prompt, useSearch, maxTokens);
+      // 원가 기록은 부가 기능이다 — 여기서 오류가 나도 방금 성공한 응답을 버리면 안 된다.
+      if (logCtx) {
+        try {
+          db.logAiCost({
+            userId: logCtx.userId, jobId: logCtx.jobId, roleKey,
+            model: entry.model,
+            promptTokens: result.usage.promptTokens, completionTokens: result.usage.completionTokens,
+            totalTokens: result.usage.totalTokens, costUsd: result.usage.costUsd,
+            at: new Date().toISOString(),
+          });
+        } catch (logErr) {
+          console.warn("[원가 로그 기록 실패 — 응답 자체는 정상 처리]", logErr.message);
+        }
+      }
       return { text: result.text, citations: result.citations, modelUsed: friendlyModel(entry), modelId: entry.model };
     } catch (err) {
       if (err.message === "API_KEY_MISSING") throw err;
@@ -262,10 +308,15 @@ function getOrCreateDeviceId(req, res) {
 // 세션을 바꾸지 않는 상태변경 요청(POST/PUT/DELETE)을 검사한다. 로그인 전 접근하는
 // signup/login/guest, 그리고 메타(인스타그램)가 서버 대 서버로 직접 호출하는 웹훅은
 // 브라우저 쿠키를 쓰지 않으므로 검사 대상에서 제외한다.
+// /api/admin/*은 쿠키 세션이 아니라 별도 비밀키(ADMIN_KEY)로 보호되므로 CSRF 대상이 아니다
+// (공격자 페이지가 그 키 값을 알 방법이 없어 위조 요청을 만들 수 없다).
 const CSRF_EXEMPT_PATHS = new Set(["/api/signup", "/api/login", "/api/guest", "/webhooks/instagram"]);
+function isCsrfExempt(path) {
+  return CSRF_EXEMPT_PATHS.has(path) || path.indexOf("/api/admin/") === 0;
+}
 function csrfProtection(req, res, next) {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
-  if (CSRF_EXEMPT_PATHS.has(req.path)) return next();
+  if (isCsrfExempt(req.path)) return next();
   const cookieToken = parseCookies(req).vo_csrf;
   const headerToken = req.headers["x-csrf-token"];
   if (!cookieToken || !headerToken || cookieToken !== headerToken) {
@@ -274,6 +325,20 @@ function csrfProtection(req, res, next) {
   next();
 }
 app.use(csrfProtection);
+
+// 로그인 유지(슬라이딩 세션) — 로그인 쿠키는 30일짜리인데, 그동안 한 번이라도 사이트를 쓰면
+// 만료 시각을 다시 30일 뒤로 늘려준다. 그래서 계속 방문하는 한 로그아웃을 직접 누르기 전까지는
+// 로그인 상태가 계속 유지된다. 정적 파일(이미지 등) 요청까지는 굳이 늘릴 필요 없어 건너뛴다.
+app.use((req, res, next) => {
+  if (req.path.startsWith("/assets/") || req.path.startsWith("/cardnews/")) return next();
+  const cookies = parseCookies(req);
+  if (cookies.vo_session && cookies.vo_csrf) {
+    const maxAge = 60 * 60 * 24 * 30;
+    addCookie(res, "vo_session=" + cookies.vo_session + "; HttpOnly; Path=/; Max-Age=" + maxAge + "; SameSite=Lax");
+    addCookie(res, "vo_csrf=" + cookies.vo_csrf + "; Path=/; Max-Age=" + maxAge + "; SameSite=Lax");
+  }
+  next();
+});
 
 // 결제·비밀정보 암호화 — 인스타그램 액세스 토큰처럼 그대로 새어나가면 계정을 탈취당할 수 있는
 // 값은 파일에 평문으로 저장하지 않는다. SESSION_SECRET에서 파생한 키로 AES-256-GCM 암호화한다.
@@ -307,6 +372,7 @@ function publicUser(u) {
     usage: (u.usage || []).slice(-12).reverse(),
     company: u.company || { name: "", logo: "" },
     cardnewsHistory: (u.cardnewsHistory || []).slice(-20).reverse(),
+    promoOptout: !!u.promoOptout,
   };
 }
 // 작업이 실제로 끝나(보고서가 나온) 시점에 한 번만 차감한다 — 도중에 오류가 나면 차감하지 않는다.
@@ -397,6 +463,16 @@ function emit(job, event) {
   for (const res of job.listeners) {
     try { res.write(payload); } catch (e) { /* 끊긴 화면은 무시 */ }
   }
+}
+// 통계용 기록일 뿐이다 — 여기서 실패한다고 이미 잘 진행되던(또는 성공한) 실제 업무를
+// "에러"로 뒤집으면 안 되므로 항상 조용히 실패를 삼킨다.
+function safeUpdateJobLogStatus(jobId, status, errorMessage, updatedAt) {
+  try { db.updateJobLogStatus(jobId, status, errorMessage, updatedAt); }
+  catch (e) { console.warn("[업무 기록 갱신 실패 — 무시하고 계속]", e.message); }
+}
+function safeCreateJobLog(jobId, userId, kind, question, agents, createdAt) {
+  try { db.createJobLog(jobId, userId, kind, question, agents, createdAt); }
+  catch (e) { console.warn("[업무 기록 생성 실패 — 무시하고 계속]", e.message); }
 }
 
 function waitForCeo(job) {
@@ -561,6 +637,27 @@ function 총괄검수지시(question, ceoFeedback, outputs) {
   );
 }
 
+// 쿠팡 상품 1개(북마클릿으로 가져온 정보)로 카드뉴스 문구를 N개 버전으로 다르게 짓는다.
+// (실제 이미지는 이 문구를 social/cardnews.js의 generateCardNews()에 그대로 꽂아서 만든다)
+function 카드뉴스카피생성지시(category, productName, price, quantity) {
+  return (
+    한국어전용 +
+    "당신은 인스타그램 카드뉴스 카피라이터입니다. 아래 상품 하나로 서로 다른 버전의 카드뉴스 문구를 " +
+    quantity + "개 지어주세요. 같은 상품이라도 후킹 문구·태그·특징 표현을 서로 겹치지 않게 다양하게 씁니다.\n\n" +
+    "[카테고리] " + category + "\n" +
+    "[상품명] " + productName + "\n" +
+    "[가격] " + (price || "확인 안 됨") + "\n\n" +
+    "작성 규칙:\n" +
+    "- hook: 궁금증을 유발하는 짧은 후킹 문구 (예: '~~하는 법', '~~의 비밀')\n" +
+    "- tag: 상단에 붙는 짧은 태그 (예: '오늘의 발견', '자취 필수템')\n" +
+    "- bullets: 상품 특징 3개, 각 15자 이내\n" +
+    "- cta: 마지막 장에 들어갈 짧은 구매 유도 문구\n" +
+    "- 과장·허위 표현 금지, 확인 안 된 효능은 쓰지 않는다\n\n" +
+    "JSON만 출력하세요. 다른 말은 쓰지 마세요. 모든 문자열은 100% 한국어로 쓰세요.\n" +
+    '{"variants": [ {"hook":"", "tag":"", "bullets":["","",""], "cta":""}, ... 총 ' + quantity + '개 ] }'
+  );
+}
+
 /* ────────────────────────── 전체 업무 진행 ────────────────────────── */
 
 async function runPipeline(job) {
@@ -586,7 +683,7 @@ async function runPipeline(job) {
           getMemoryContext(job.userId, spec.roleKey), getKnowledgeContext(job.userId, key),
           getBrandContext(job.userId)
         );
-        const result = await callWithFallback(config, spec.roleKey, prompt, spec.useSearch, 1800);
+        const result = await callWithFallback(config, spec.roleKey, prompt, spec.useSearch, 1800, { userId: job.userId, jobId: job.id });
         results[key] = { text: result.text, citations: result.citations, modelUsed: result.modelUsed };
         emit(job, { type: "status", agent: key, state: "submit", text: "결과 제출" });
         emit(job, {
@@ -623,7 +720,7 @@ async function runPipeline(job) {
         emit(job, { type: "status", agent: "총괄AI", state: "working", text: "전체 결과 검수 중" });
 
         const outputs = agentKeys.map((key) => ({ key, label: SPECIALISTS[key].label, text: results[key].text }));
-        const reviewResult = await callWithFallback(config, "총괄AI_검수", 총괄검수지시(question, ceoFeedback, outputs), false, 2600);
+        const reviewResult = await callWithFallback(config, "총괄AI_검수", 총괄검수지시(question, ceoFeedback, outputs), false, 2600, { userId: job.userId, jobId: job.id });
         const reviewJson = parseJSON(reviewResult.text);
         allCitations = agentKeys.reduce((acc, key) => acc.concat(results[key].citations || []), []);
 
@@ -686,6 +783,7 @@ async function runPipeline(job) {
       // 3) 대표(사용자) 최종 승인
       ["총괄AI"].concat(agentKeys).forEach((n) => emit(job, { type: "status", agent: n, state: "done", text: "승인 대기" }));
       emit(job, { type: "await-approval", round, lastRound: round >= MAX_CEO_ROUNDS, report: finalReport, citations: allCitations });
+      safeUpdateJobLogStatus(job.id, "awaiting_approval", null, new Date().toISOString());
 
       const decision = await waitForCeo(job);
 
@@ -696,10 +794,12 @@ async function runPipeline(job) {
           if (job.userId) addMemory(job.userId, spec.roleKey, question, results[key].text.slice(0, 300));
         });
         emit(job, { type: "approved", text: "대표님이 승인하셨습니다. 업무를 종료합니다." });
+        safeUpdateJobLogStatus(job.id, "approved", null, new Date().toISOString());
         break;
       }
       if (round >= MAX_CEO_ROUNDS) {
         emit(job, { type: "approved", text: "보완 요청 횟수를 다 썼습니다. 새 업무로 다시 시켜 주세요." });
+        safeUpdateJobLogStatus(job.id, "abandoned", "보완 요청 횟수 소진", new Date().toISOString());
         break;
       }
       ceoFeedback = decision.feedback || "대표가 보완을 요청했습니다. 더 구체적인 근거와 실행 방법을 채워 주세요.";
@@ -714,6 +814,94 @@ async function runPipeline(job) {
         : "업무 진행 중 문제가 생겼습니다: " + err.message;
     console.error("[파이프라인 오류]", err);
     emit(job, { type: "error", text: friendly });
+    safeUpdateJobLogStatus(job.id, "error", String(err.message || err).slice(0, 300), new Date().toISOString());
+  } finally {
+    job.finished = true;
+    for (const res of job.listeners) { try { res.end(); } catch (e) {} }
+    job.listeners = [];
+  }
+}
+
+/* ────────────────────────── 쿠팡 상품 1건 → 카드뉴스 N개 자동 생성 + 인스타 자동 업로드 ──────────────────────────
+ * 북마클릿으로 상품명·가격·사진을 가져온 뒤, 문구만 AI가 여러 버전으로 짓고, 이미지 생성부터
+ * 인스타그램 게시까지 사람 개입 없이 끝까지 진행한다. (댓글 자동답장은 기존 웹훅이 그대로 처리)
+ */
+function createSimpleJob(userId, cost) {
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const job = { id, userId, cost: cost || 0, charged: 0, events: [], listeners: [], finished: false, createdAt: Date.now() };
+  jobs.set(id, job);
+  return job;
+}
+
+async function runCoupangAutoJob(job, params) {
+  const { category, productName, price, imageUrl, quantity, commentKeyword, baseUrl, social, promoOptout } = params;
+  const config = loadModelConfig();
+  let doneCount = 0;
+
+  try {
+    emit(job, { type: "status", agent: "카피라이터", state: "working", text: "카드뉴스 문구 " + quantity + "개 짓는 중" });
+    const prompt = 카드뉴스카피생성지시(category, productName, price, quantity);
+    const copyResult = await callWithFallback(config, "전문_카피라이터", prompt, false, 1800, { userId: job.userId, jobId: job.id });
+    const parsed = parseJSON(copyResult.text);
+    const variants = (parsed && Array.isArray(parsed.variants) ? parsed.variants : []).slice(0, quantity);
+    if (!variants.length) throw new Error("카피 생성에 실패했습니다. 다시 시도해 주세요.");
+    emit(job, { type: "status", agent: "카피라이터", state: "done", text: variants.length + "개 문구 완성" });
+
+    for (let i = 0; i < variants.length; i++) {
+      const v = variants[i] || {};
+      const seq = i + 1;
+      emit(job, { type: "status", agent: "비서", state: "working", text: seq + "/" + variants.length + " 이미지 생성 중" });
+
+      const slug = crypto.randomBytes(6).toString("hex");
+      const outDir = path.join(__dirname, "public", "cardnews", slug);
+      await generateCardNews(
+        {
+          name: productName,
+          hook: v.hook || productName,
+          tag: v.tag || "오늘의 발견",
+          bullets: Array.isArray(v.bullets) ? v.bullets.slice(0, 3) : [],
+          price: price || "",
+          photoUrl: imageUrl,
+          commentKeyword,
+          cta: v.cta,
+        },
+        outDir
+      );
+      const urls = ["slide1.png", "slide2.png", "slide3.png"].map((f) => baseUrl + "/cardnews/" + slug + "/" + f);
+      emit(job, {
+        type: "step", agent: "비서", label: seq + "번째 카드뉴스 (" + (v.hook || "") + ")",
+        text: (v.hook || "") + "\n" + (Array.isArray(v.bullets) ? v.bullets.join(" · ") : ""),
+        kind: "result",
+      });
+
+      emit(job, { type: "status", agent: "총괄AI", state: "working", text: seq + "/" + variants.length + " 인스타그램 업로드 중" });
+      // 바이럴 성장 전략 1번 — 자동 게시되는 캡션 끝에 짧은 출처를 남긴다(강제하면 반감이 생기므로 opt-out 가능).
+      const promoLine = promoOptout ? "" : ("\n\n🤖 AI 직원팀이 이 콘텐츠를 만들었어요 · " + baseUrl.replace(/^https?:\/\//, ""));
+      const caption = (v.hook || productName) + "\n\n" + (Array.isArray(v.bullets) ? v.bullets.map((b) => "· " + b).join("\n") : "") + "\n\n" + (v.cta || "") + promoLine;
+      const publishResult = await publishCarouselPost(social.igUserId, decryptSecret(social.accessTokenEnc), urls, caption);
+
+      db.addCardnewsHistory(job.userId, { jobId: slug, name: productName, hook: v.hook || "", imageUrls: urls, createdAt: nowKR() });
+      doneCount++;
+      const remaining = chargeUser(job.userId, COST_CARDNEWS, { kind: "쿠팡 자동 카드뉴스", label: productName + " (" + seq + "/" + variants.length + ")" });
+      if (remaining !== null) emit(job, { type: "credit", credits: remaining, cost: COST_CARDNEWS });
+
+      emit(job, {
+        type: "step", agent: "총괄AI", label: seq + "번째 인스타그램 게시 완료",
+        text: "게시물 ID: " + (publishResult && publishResult.id ? publishResult.id : "확인 필요"),
+        kind: "review",
+      });
+    }
+
+    emit(job, { type: "approved", text: doneCount + "개 카드뉴스를 생성해서 인스타그램에 전부 게시했습니다." });
+    emit(job, { type: "done" });
+    safeUpdateJobLogStatus(job.id, "approved", null, new Date().toISOString());
+  } catch (err) {
+    console.error("[쿠팡 자동 파이프라인 오류]", err);
+    const friendly = doneCount > 0
+      ? doneCount + "개까지는 성공했고, 그 다음에 문제가 생겼습니다: " + err.message
+      : "시작하지 못했습니다: " + err.message;
+    emit(job, { type: "error", text: friendly });
+    safeUpdateJobLogStatus(job.id, "error", String(err.message || err).slice(0, 300), new Date().toISOString());
   } finally {
     job.finished = true;
     for (const res of job.listeners) { try { res.end(); } catch (e) {} }
@@ -741,28 +929,75 @@ app.get("/api/agents", (req, res) => {
 });
 
 /* ── 회원 · 로그인 ── */
+// 같은 IP가 계정을 계속 새로 만들어서 가입 보너스(300 크레딧)만 반복해서 받아가는 것을 막는다.
+const SIGNUP_LIMIT_PER_WINDOW = 5;
+const SIGNUP_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24시간
+const signupLog = new Map(); // ip -> timestamps[]
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamps] of signupLog) {
+    const kept = timestamps.filter((t) => now - t < SIGNUP_LIMIT_WINDOW_MS);
+    if (kept.length) signupLog.set(ip, kept);
+    else signupLog.delete(ip);
+  }
+}, 30 * 60 * 1000);
+
 app.post("/api/signup", (req, res) => {
+  const ip = req.ip || "unknown";
+  const now = Date.now();
+  const timestamps = (signupLog.get(ip) || []).filter((t) => now - t < SIGNUP_LIMIT_WINDOW_MS);
+  if (timestamps.length >= SIGNUP_LIMIT_PER_WINDOW) {
+    return res.status(429).json({ error: "가입 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요." });
+  }
+
   const email = String((req.body && req.body.email) || "").trim().toLowerCase();
   const password = String((req.body && req.body.password) || "");
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "이메일 형식이 올바르지 않습니다." });
   if (password.length < 6) return res.status(400).json({ error: "비밀번호는 6자 이상으로 정해 주세요." });
 
   if (db.emailExists(email)) return res.status(409).json({ error: "이미 가입된 이메일입니다." });
+  timestamps.push(now);
+  signupLog.set(ip, timestamps);
 
   const { salt, hash } = hashPassword(password);
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  const u = db.createUser({ id, email, salt, hash, credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, guest: false, createdAt: nowKR() });
+  const refCode = parseCookies(req).vo_ref;
+  const referredBy = refCode && db.referralCodeExists(refCode) ? refCode : null;
+  const u = db.createUser({ id, email, salt, hash, credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, guest: false, createdAt: nowKR(), referredBy });
   setSession(res, id);
   res.json({ ok: true, user: publicUser(u) });
 });
 
+// 비밀번호 무차별 대입(brute force) 방지 — 같은 IP가 실패를 반복하면 잠깐 막는다.
+const LOGIN_FAIL_LIMIT = 10;
+const LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000; // 15분
+const loginFailLog = new Map(); // ip -> timestamps[]
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamps] of loginFailLog) {
+    const kept = timestamps.filter((t) => now - t < LOGIN_FAIL_WINDOW_MS);
+    if (kept.length) loginFailLog.set(ip, kept);
+    else loginFailLog.delete(ip);
+  }
+}, 30 * 60 * 1000);
+
 app.post("/api/login", (req, res) => {
+  const ip = req.ip || "unknown";
+  const now = Date.now();
+  const fails = (loginFailLog.get(ip) || []).filter((t) => now - t < LOGIN_FAIL_WINDOW_MS);
+  if (fails.length >= LOGIN_FAIL_LIMIT) {
+    return res.status(429).json({ error: "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요." });
+  }
+
   const email = String((req.body && req.body.email) || "").trim().toLowerCase();
   const password = String((req.body && req.body.password) || "");
   const u = db.getUserByEmail(email);
   if (!u || !verifyPassword(password, u.salt, u.hash)) {
+    fails.push(now);
+    loginFailLog.set(ip, fails);
     return res.status(401).json({ error: "이메일 또는 비밀번호가 맞지 않습니다." });
   }
+  loginFailLog.delete(ip);
   setSession(res, u.id);
   res.json({ ok: true, user: publicUser(u) });
 });
@@ -907,6 +1142,14 @@ app.post("/api/company", (req, res) => {
   res.json({ ok: true, user: publicUser(db.getUserById(u.id)) });
 });
 
+// 자동 게시 캡션에 "Made with 넥스타" 홍보 문구를 넣을지 여부 — 기본은 포함, 원치 않으면 끌 수 있다.
+app.post("/api/settings/promo", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  db.setPromoOptout(u.id, !!(req.body && req.body.optout));
+  res.json({ ok: true, user: publicUser(db.getUserById(u.id)) });
+});
+
 /* ══════════════════════════════════════════════════════════════
    인스타그램 카드뉴스 자동화 (Zapier·매니챗 없이 메타 공식 API 직접 연동)
    ══════════════════════════════════════════════════════════════ */
@@ -999,8 +1242,56 @@ app.post("/api/social/publish", async (req, res) => {
   }
 });
 
+// 3-1) 쿠팡 상품 1건(북마클릿으로 가져온 이름/가격/사진) → 카드뉴스 N개 자동 생성 + 인스타 자동 업로드
+const COUPANG_AUTO_MAX_QTY = 5; // 인스타그램 콘텐츠 게시 API 자체 한도(24시간 25건)와 비용을 함께 고려한 상한
+app.post("/api/social/coupang-auto", (req, res) => {
+  const user = currentUser(req);
+  if (!user) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const social = user.social && user.social.instagram;
+  if (!social) return res.status(400).json({ error: "먼저 인스타그램 계정을 연결해 주세요 (충전·설정 메뉴)." });
+
+  const b = req.body || {};
+  const productName = String(b.name || "").trim();
+  const category = String(b.category || "").trim();
+  const price = String(b.price || "").trim();
+  const imageUrl = String(b.imageUrl || "").trim();
+  const quantity = Math.min(COUPANG_AUTO_MAX_QTY, Math.max(1, parseInt(b.quantity, 10) || 1));
+  const commentKeyword = String(b.commentKeyword || "정보").trim();
+
+  if (!productName) return res.status(400).json({ error: "상품명이 필요합니다. 북마클릿으로 다시 가져와 주세요." });
+  if (!category) return res.status(400).json({ error: "카테고리를 선택해 주세요." });
+
+  const cost = COST_CARDNEWS * quantity;
+  if ((user.credits || 0) < cost) {
+    return res.status(402).json({ error: "크레딧이 부족합니다. 충전 후 다시 시도해 주세요.", need: cost, have: user.credits || 0 });
+  }
+
+  const job = createSimpleJob(user.id, cost);
+  safeCreateJobLog(job.id, user.id, "coupang_auto", productName + " (" + category + ")", [], new Date().toISOString());
+  res.json({ jobId: job.id, cost });
+
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+  runCoupangAutoJob(job, { category, productName, price, imageUrl, quantity, commentKeyword, baseUrl, social, promoOptout: !!user.promoOptout });
+});
+
 // 4) 메타 웹훅 — 댓글에 키워드 남기면 자동으로 비공개 답장(DM) 발송 (매니챗 대체, 무료·무제한)
 const IG_WEBHOOK_VERIFY_TOKEN = process.env.IG_WEBHOOK_VERIFY_TOKEN || "nexta-verify";
+// META_APP_SECRET(메타 개발자 앱의 "앱 시크릿") — 이 웹훅이 정말 메타에서 온 요청인지 서명을
+// 검증하는 데 쓴다. 이게 없으면 남이 igUserId만 알아내서 가짜 웹훅을 보내 실제 계정으로
+// 원치 않는 DM을 보내게 만들 수 있어서, 설정 안 돼 있으면 아예 처리를 거부한다(안전 우선).
+const META_APP_SECRET = process.env.META_APP_SECRET || "";
+function verifyMetaSignature(req) {
+  if (!META_APP_SECRET) return false;
+  const header = req.headers["x-hub-signature-256"];
+  if (!header || !req.rawBody) return false;
+  const expected = "sha256=" + crypto.createHmac("sha256", META_APP_SECRET).update(req.rawBody).digest("hex");
+  try {
+    return header.length === expected.length && crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
+  } catch (e) {
+    return false;
+  }
+}
 app.get("/webhooks/instagram", (req, res) => {
   const challenge = verifyWebhook(req.query, IG_WEBHOOK_VERIFY_TOKEN);
   if (challenge) return res.status(200).send(challenge);
@@ -1009,6 +1300,10 @@ app.get("/webhooks/instagram", (req, res) => {
 app.post("/webhooks/instagram", async (req, res) => {
   res.sendStatus(200); // 메타는 빠른 200 응답을 기대하므로 먼저 응답하고 뒤에서 처리
   try {
+    if (!verifyMetaSignature(req)) {
+      console.warn("[웹훅 거부] 서명이 없거나 META_APP_SECRET 미설정 — 처리하지 않음");
+      return;
+    }
     const igUserId = req.body?.entry?.[0]?.id;
     const social = db.getSocialInstagramByIgUserId(igUserId);
     if (!social) return;
@@ -1042,14 +1337,18 @@ app.post("/api/start", (req, res) => {
   }
 
   const job = createJob(question, agentKeys, user.id, cost, quick);
+  safeCreateJobLog(job.id, user.id, "pipeline", question, agentKeys, new Date().toISOString());
   res.json({ jobId: job.id, cost });
   runPipeline(job);
 });
 
 // 진행 상황 실시간 받기
 app.get("/api/stream/:jobId", (req, res) => {
+  const user = currentUser(req);
+  if (!user) return res.status(401).end();
   const job = jobs.get(req.params.jobId);
   if (!job) return res.status(404).end();
+  if (job.userId !== user.id) return res.status(403).end();
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -1084,9 +1383,12 @@ app.post("/api/feedback", (req, res) => {
 
 // 대표의 결정 (승인 / 보완 요청)
 app.post("/api/decide", (req, res) => {
+  const user = currentUser(req);
+  if (!user) return res.status(401).json({ error: "로그인이 필요합니다." });
   const { jobId, action, feedback } = req.body || {};
   const job = jobs.get(jobId);
   if (!job) return res.status(404).json({ error: "작업을 찾을 수 없습니다." });
+  if (job.userId !== user.id) return res.status(403).json({ error: "본인의 작업만 결재할 수 있습니다." });
   if (!job.ceoResolve) return res.status(409).json({ error: "아직 승인받을 단계가 아닙니다." });
   if (action !== "approve" && action !== "revise") {
     return res.status(400).json({ error: "승인 또는 보완요청만 가능합니다." });
@@ -1133,10 +1435,79 @@ app.delete("/api/knowledge/:role/:id", (req, res) => {
   res.json({ ok: true, items: db.getKnowledge(u.id, role) });
 });
 
+/* ══════════════════════════════════════════════════════════════
+   인플루언서/제휴 추천 코드 관리 (대표님 전용 — 로그인 계정과 무관하게 별도 비밀키로 보호)
+   .env에 ADMIN_KEY를 반드시 정해두세요. 안 정하면 누구나 코드 목록을 볼 수 있게 되어 위험합니다.
+   사용법: /api/admin/referrals?key=여기에_ADMIN_KEY
+   ══════════════════════════════════════════════════════════════ */
+const ADMIN_KEY = process.env.ADMIN_KEY || "";
+function timingSafeStringEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+function requireAdminKey(req, res, next) {
+  const key = (req.query && req.query.key) || (req.body && req.body.key) || "";
+  if (!ADMIN_KEY || !key || !timingSafeStringEqual(key, ADMIN_KEY)) {
+    return res.status(403).json({ error: "권한이 없습니다. (.env에 ADMIN_KEY를 설정했는지, key 값이 맞는지 확인)" });
+  }
+  next();
+}
+app.get("/api/admin/referrals", requireAdminKey, (req, res) => {
+  res.json({ codes: db.listReferralCodes(), stats: db.getReferralStats() });
+});
+// 관리자 대시보드 한 화면에 필요한 데이터를 전부 모아서 한 번에 내려준다.
+app.get("/api/admin/dashboard", requireAdminKey, (req, res) => {
+  res.json({
+    users: db.getUserStats(),
+    recentSignups: db.getRecentSignups(20),
+    jobStats: db.getJobStats(),
+    agentPopularity: db.getAgentPopularity(),
+    recentQuestions: db.getRecentQuestions(30),
+    feedback: db.getFeedbackStats(),
+    costByRole: db.getCostSummaryByRole(),
+    referrals: db.getReferralStats(),
+  });
+});
+app.post("/api/admin/referrals", requireAdminKey, (req, res) => {
+  const code = String((req.body && req.body.code) || "").trim();
+  const label = String((req.body && req.body.label) || "").trim().slice(0, 60);
+  if (!/^[a-zA-Z0-9_-]{2,40}$/.test(code)) {
+    return res.status(400).json({ error: "코드는 영문/숫자/-/_ 2~40자로 만들어 주세요 (한글·공백 불가, 링크에 들어가는 값이라서요)." });
+  }
+  if (db.referralCodeExists(code)) return res.status(409).json({ error: "이미 있는 코드입니다." });
+  db.createReferralCode(code, label, nowKR());
+  res.json({ ok: true, codes: db.listReferralCodes() });
+});
+
+// 전역 에러 처리 — Express 기본 에러 페이지는 서버 내부 파일 경로와 스택 트레이스를
+// 그대로 응답에 실어 보낸다(예: 잘못된 JSON을 보내기만 해도 노출됨). 그 대신 항상 짧은
+// JSON 에러만 돌려주고, 실제 원인은 서버 로그에만 남긴다.
+app.use((err, req, res, next) => {
+  console.error("[처리 안 된 오류]", err);
+  if (res.headersSent) return next(err);
+  const status = err.status || err.statusCode || 400;
+  res.status(status).json({ error: "요청을 처리하지 못했습니다." });
+});
+// 정의된 라우트가 하나도 안 걸린 요청(존재하지 않는 API 경로 등)도 정보 노출 없이 404만 돌려준다.
+app.use((req, res) => {
+  res.status(404).json({ error: "찾을 수 없습니다." });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("가상오피스 서버 실행 중 → http://localhost:" + PORT);
   if (!OPENROUTER_API_KEY) {
     console.warn("주의: OPENROUTER_API_KEY가 없습니다. .env 파일에 키를 넣어야 실제로 동작합니다.");
+  }
+  if (SESSION_SECRET === "virtual-office-dev-secret-change-me") {
+    console.warn("보안 주의: SESSION_SECRET을 .env에 무작위 문자열로 정해 주세요 (로그인 서명 + 인스타 토큰 암호화에 쓰입니다).");
+  }
+  if (!ADMIN_KEY) {
+    console.warn("보안 주의: ADMIN_KEY가 없습니다. 관리자 페이지(/api/admin/*)를 쓰려면 .env에 정해 주세요.");
+  }
+  if (!META_APP_SECRET) {
+    console.warn("보안 주의: META_APP_SECRET이 없어서 인스타그램 웹훅(댓글 자동답장)을 처리하지 않습니다. 메타 개발자 앱의 '앱 시크릿'을 .env에 넣어 주세요.");
   }
 });
