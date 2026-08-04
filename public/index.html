@@ -437,7 +437,7 @@
     </div>
     <div class="hero-right">
       <div class="glowbg"></div>
-      <img src="/assets/char-bot-a.png" alt="비비">
+      <img src="/assets/char-cover.png" alt="비비">
     </div>
   </div>
   <div class="landing-legal">
@@ -636,7 +636,7 @@
       <span class="hint" id="coLogoHint">눌러서 로고 이미지를 올려주세요 (선택)</span>
     </div>
     <label for="coName">회사 이름</label>
-    <input id="coName" type="text" maxlength="40" placeholder="예) 재영커머스">
+    <input id="coName" type="text" maxlength="40" placeholder="예) OO커머스">
     <div class="auth-err" id="coErr"></div>
     <button class="wide" id="coSaveBtn">회사 설립하기</button>
     <button class="co-skip" id="coSkipBtn">나중에 할게요</button>
@@ -722,19 +722,19 @@
 
 /* ══════ 직원 정보 ══════ */
 var CREW = [
-  { name:'전략기획', role:'전략기획 담당',        color:'#2563eb', sprite:'b', desc:'사업 방향·신규 아이템·성장 전략을 조사하고 제안해요.' },
-  { name:'재무분석', role:'재무분석 담당',        color:'#1e3a8a', sprite:'b', desc:'매출·비용·수익성 같은 숫자를 정리하고 분석해요.' },
-  { name:'SEO',      role:'SEO 담당',             color:'#ea580c', sprite:'b', desc:'검색 노출을 높일 키워드와 콘텐츠 구조를 제안해요.' },
-  { name:'고객문의', role:'고객문의 응대 담당',    color:'#d97706', sprite:'a', desc:'고객 문의에 대한 답변 초안을 써요.' },
-  { name:'영업관리', role:'영업관리 담당',        color:'#ca8a04', sprite:'a', desc:'영업 절차·고객 관리·제안서 구조를 정리해요.' },
-  { name:'채용',     role:'채용 담당',            color:'#16a34a', sprite:'a', desc:'채용 공고문과 지원자 검토 기준을 만들어요.' },
-  { name:'총괄AI',   role:'총괄 (검수·판단)',     color:'#7c3aed', sprite:'b', desc:'모든 비비의 결과를 검수하고 보고서를 올려요.' },
-  { name:'SNS콘텐츠',role:'SNS·블로그 콘텐츠',    color:'#0891b2', sprite:'a', desc:'SNS·블로그에 올릴 글 초안을 써요.' },
-  { name:'카피라이터',role:'카피라이터',          color:'#0e7490', sprite:'a', desc:'광고 문구·상세페이지 문구를 써요.' },
-  { name:'이메일',   role:'이메일 담당',          color:'#15803d', sprite:'a', desc:'고객·거래처에 보낼 이메일 초안을 써요.' },
-  { name:'성장코치', role:'성장 코치',            color:'#1d4ed8', sprite:'a', desc:'업무 습관·목표 관리·우선순위를 도와요.' },
-  { name:'이커머스', role:'이커머스 운영 담당',    color:'#be185d', sprite:'b', desc:'스마트스토어·쿠팡 운영을 정리해요.' },
-  { name:'비서',     role:'비서 (이미지 기획)',   color:'#db2777', sprite:'b', desc:'이미지 기획안(장면·문구·구도)을 글로 써요.' }
+  { name:'전략기획', role:'전략기획 담당',        color:'#2563eb', img:'strategy',   desc:'사업 방향·신규 아이템·성장 전략을 조사하고 제안해요.' },
+  { name:'재무분석', role:'재무분석 담당',        color:'#1e3a8a', img:'finance',    desc:'매출·비용·수익성 같은 숫자를 정리하고 분석해요.' },
+  { name:'SEO',      role:'SEO 담당',             color:'#ea580c', img:'seo',        desc:'검색 노출을 높일 키워드와 콘텐츠 구조를 제안해요.' },
+  { name:'고객문의', role:'고객문의 응대 담당',    color:'#d97706', img:'cs',         desc:'고객 문의에 대한 답변 초안을 써요.' },
+  { name:'영업관리', role:'영업관리 담당',        color:'#ca8a04', img:'sales',      desc:'영업 절차·고객 관리·제안서 구조를 정리해요.' },
+  { name:'채용',     role:'채용 담당',            color:'#16a34a', img:'hiring',     desc:'채용 공고문과 지원자 검토 기준을 만들어요.' },
+  { name:'총괄AI',   role:'총괄 (검수·판단)',     color:'#7c3aed', img:'manager',    desc:'모든 비비의 결과를 검수하고 보고서를 올려요.' },
+  { name:'SNS콘텐츠',role:'SNS·블로그 콘텐츠',    color:'#0891b2', img:'sns',        desc:'SNS·블로그에 올릴 글 초안을 써요.' },
+  { name:'카피라이터',role:'카피라이터',          color:'#0e7490', img:'copywriter', desc:'광고 문구·상세페이지 문구를 써요.' },
+  { name:'이메일',   role:'이메일 담당',          color:'#15803d', img:'email',      desc:'고객·거래처에 보낼 이메일 초안을 써요.' },
+  { name:'성장코치', role:'성장 코치',            color:'#1d4ed8', img:'coach',      desc:'업무 습관·목표 관리·우선순위를 도와요.' },
+  { name:'이커머스', role:'이커머스 운영 담당',    color:'#be185d', img:'ecommerce',  desc:'스마트스토어·쿠팡 운영을 정리해요.' },
+  { name:'비서',     role:'비서 (이미지 기획)',   color:'#db2777', img:'assistant',  desc:'이미지 기획안(장면·문구·구도)을 글로 써요.' }
 ];
 var PICKABLE = ['전략기획','재무분석','SEO','고객문의','영업관리','채용','SNS콘텐츠','카피라이터','이메일','성장코치','이커머스','비서'];
 var BRAND_KEY = '브랜드가이드';
@@ -831,7 +831,7 @@ function buildCards(){
     card.innerHTML =
       '<div class="acc"></div>'
       + (pickable ? '<div class="pickmark">✓</div>' : '<div class="lockbadge">항상 참여</div>')
-      + '<div class="portrait"><img src="/assets/char-bot-' + p.sprite + '.png" alt=""></div>'
+      + '<div class="portrait"><img src="/assets/char-' + p.img + '.png" alt=""></div>'
       + '<div class="cbody">'
       +   '<div class="cname">비비-' + p.serial + '</div>'
       +   '<div class="crole">' + esc(p.role) + '</div>'
@@ -908,7 +908,7 @@ function openProfile(p){
   box.style.setProperty('--rc', p.color);
   box.style.setProperty('--tint', tint(p.color, .14));
   box.innerHTML =
-    '<div class="prof-hero"><img src="/assets/char-bot-' + p.sprite + '.png" alt=""></div>'
+    '<div class="prof-hero"><img src="/assets/char-' + p.img + '.png" alt=""></div>'
     + '<div class="prof-name">비비-' + p.serial + '</div>'
     + '<div class="prof-role">' + esc(p.role) + '</div>'
     + '<div class="prof-desc">' + esc(p.desc) + '</div>'
