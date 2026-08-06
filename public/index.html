@@ -129,7 +129,7 @@
   .card-grid.mode-slide .ai-card{ flex:0 0 320px; scroll-snap-align:center; }
   @media(max-width:640px){ .card-grid.mode-slide .ai-card{ flex:0 0 84%; } }
   .mode-slide .portrait{ height:228px; }
-  .mode-slide .portrait img{ height:206px; }
+  .mode-slide .p-badge{ width:104px; height:104px; font-size:32px; }
   .navarrow{ position:absolute; top:120px; z-index:6; width:42px; height:42px; border-radius:50%;
     background:#fff; border:1px solid var(--line); box-shadow:0 5px 16px rgba(16,18,34,.16);
     font-size:24px; line-height:1; color:var(--ink); display:flex; align-items:center; justify-content:center;
@@ -159,12 +159,14 @@
   .ai-card.locked .pickmark{ display:none; }
   .lockbadge{ position:absolute; top:11px; right:11px; z-index:3; font-size:9.5px; font-weight:700;
     color:var(--soft); background:#f3f4f6; border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
-  .portrait{ position:relative; height:158px; overflow:hidden; background:linear-gradient(180deg,var(--tint),#fff 92%); }
-  .portrait img{ position:absolute; left:50%; bottom:6px; transform:translateX(-50%); height:138px; width:auto; display:block;
-    transition:filter .25s, transform .25s; }
-  @keyframes botwork{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(-4px)}}
-  .ai-card.st-work .portrait img,.ai-card.st-think .portrait img{ animation:botwork 1.6s ease-in-out infinite; }
-  .ai-card:not(.selected) .portrait img{ filter:grayscale(.5); }
+  .portrait{ position:relative; height:158px; overflow:hidden; background:linear-gradient(180deg,var(--tint),#fff 92%);
+    display:flex; align-items:center; justify-content:center; }
+  .p-badge{ width:84px; height:84px; border-radius:50%; background:var(--rc); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:26px; font-weight:800;
+    letter-spacing:-.5px; transition:transform .25s; box-shadow:0 8px 20px -6px var(--rc); }
+  @keyframes botwork{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+  .ai-card.st-work .p-badge,.ai-card.st-think .p-badge{ animation:botwork 1.6s ease-in-out infinite; }
+  .ai-card:not(.selected) .p-badge{ filter:grayscale(.5); opacity:.75; }
   .cbody{ padding:11px 13px 13px; }
   .cname{ font-size:13.5px; font-weight:800; }
   .crole{ font-size:11.5px; color:var(--soft); margin-top:1px; line-height:1.35; }
@@ -188,8 +190,11 @@
 
   /* 프로필 모달 */
   .prof-hero{ height:210px; border-radius:14px; overflow:hidden; position:relative;
-    background:linear-gradient(180deg,var(--tint),#fff 92%); margin-bottom:14px; }
-  .prof-hero img{ position:absolute; left:50%; bottom:10px; transform:translateX(-50%); height:186px; width:auto; }
+    background:linear-gradient(180deg,var(--tint),#fff 92%); margin-bottom:14px;
+    display:flex; align-items:center; justify-content:center; }
+  .p-badge-lg{ width:120px; height:120px; border-radius:50%; background:var(--rc); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:36px; font-weight:800;
+    letter-spacing:-.5px; box-shadow:0 10px 26px -8px var(--rc); }
   .prof-name{ font-size:20px; font-weight:800; }
   .prof-role{ font-size:13px; color:var(--soft); margin-top:2px; }
   .prof-desc{ font-size:13.5px; margin:12px 0 4px; line-height:1.6; }
@@ -893,7 +898,7 @@ function buildCards(){
     card.innerHTML =
       '<div class="acc"></div>'
       + (pickable ? '<div class="pickmark">✓</div>' : '<div class="lockbadge">항상 참여</div>')
-      + '<div class="portrait"><img src="/assets/char-' + p.img + '.png" alt=""></div>'
+      + '<div class="portrait"><div class="p-badge">' + p.serial + '</div></div>'
       + '<div class="cbody">'
       +   '<div class="cname">비비-' + p.serial + '</div>'
       +   '<div class="crole">' + esc(p.role) + '</div>'
@@ -970,7 +975,7 @@ function openProfile(p){
   box.style.setProperty('--rc', p.color);
   box.style.setProperty('--tint', tint(p.color, .14));
   box.innerHTML =
-    '<div class="prof-hero"><img src="/assets/char-' + p.img + '.png" alt=""></div>'
+    '<div class="prof-hero"><div class="p-badge-lg">' + p.serial + '</div></div>'
     + '<div class="prof-name">비비-' + p.serial + '</div>'
     + '<div class="prof-role">' + esc(p.role) + '</div>'
     + '<div class="prof-desc">' + esc(p.desc) + '</div>'
