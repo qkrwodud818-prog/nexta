@@ -56,12 +56,18 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_cardnews_user ON cardnews_history(user_id);
 
+  -- method: 'toss'(카드 자동결제) | 'bank_transfer'(무통장입금, 관리자가 수동 확인).
+  -- depositor_name은 무통장입금 신청 시 사용자가 입력한 입금자명 — 관리자가 실제 입금 내역과
+  -- 대조할 때 쓴다.
   CREATE TABLE IF NOT EXISTS orders (
     order_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    credits INTEGER, amount INTEGER, label TEXT, status TEXT, created_at TEXT
+    credits INTEGER, amount INTEGER, label TEXT, status TEXT, created_at TEXT,
+    method TEXT NOT NULL DEFAULT 'toss',
+    depositor_name TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
+  CREATE INDEX IF NOT EXISTS idx_orders_status_method ON orders(status, method);
 
   CREATE TABLE IF NOT EXISTS memory (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +152,52 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_job_log_user ON job_log(user_id);
   CREATE INDEX IF NOT EXISTS idx_job_log_status ON job_log(status);
   CREATE INDEX IF NOT EXISTS idx_job_log_created ON job_log(created_at);
+
+  -- AI 품질(헛소리 방지) 측정. 총괄AI의 담당자별 통과/반려 판정과, 대표의 최종 승인/보완요청을
+  -- 기록해서 "AI가 헛소리를 얼마나 잡아내는지"를 감이 아니라 실제 %로 볼 수 있게 한다.
+  CREATE TABLE IF NOT EXISTS quality_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,      -- 'manager_verdict' | 'ceo_decision'
+    job_id TEXT,
+    user_id TEXT,
+    role_key TEXT,           -- manager_verdict 전용
+    approved INTEGER,        -- manager_verdict 전용 (0/1)
+    attempt INTEGER,         -- manager_verdict 전용 (몇 번째 검수 시도인지)
+    action TEXT,             -- ceo_decision 전용 ('approve' | 'revise')
+    round INTEGER,           -- ceo_decision 전용
+    at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_quality_log_type_at ON quality_log(type, at);
+  CREATE INDEX IF NOT EXISTS idx_quality_log_role ON quality_log(role_key);
+
+  -- 역할별 "시스템 기본지식" — 대표(운영자)가 미리 심어두는 전문가 수준 자료.
+  -- data/knowledge.json(유저별 개인지식)과는 별개로, 유저ID 없이 role 전역으로 전 사용자에게 적용된다.
+  CREATE TABLE IF NOT EXISTS default_knowledge (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    title TEXT,
+    text TEXT,
+    added_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_default_knowledge_role ON default_knowledge(role);
+
+  -- 정기결제(토스페이먼츠 빌링) 구독 상태. 유저당 1행 — 재구독하면 같은 행을 덮어쓴다.
+  -- status: 'active'(정상 구독중, 다음 주기에 자동 청구) | 'canceled'(취소했지만 이미 낸 기간까지는
+  -- 이용 가능 — current_period_end는 그대로 두고 다음 자동청구만 안 함) | 'past_due'(자동청구 실패,
+  -- 즉시 이용 중단).
+  CREATE TABLE IF NOT EXISTS subscriptions (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    billing_key_enc TEXT,
+    customer_key TEXT,      -- 빌링키 발급 당시 쓴 토스 customerKey. 재청구할 때도 같은 값을 써야 한다.
+    status TEXT NOT NULL,
+    current_period_end TEXT,
+    canceled_at TEXT,
+    last_payment_at TEXT,
+    last_failure_reason TEXT,
+    created_at TEXT,
+    updated_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_subscriptions_status_period ON subscriptions(status, current_period_end);
 `);
 
 // 마이그레이션 — CREATE TABLE IF NOT EXISTS는 이미 있는 테이블에 새 컬럼을 추가해주지 않으므로,
@@ -159,6 +211,21 @@ if (!userColumns.includes("promo_optout")) {
 if (!userColumns.includes("referred_by")) {
   db.exec("ALTER TABLE users ADD COLUMN referred_by TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)");
+}
+// access_until: 실제 결제(무료 체험/테스트 충전 제외)를 한 번이라도 하면, 그 결제일로부터
+// 30일 뒤 날짜(ISO)가 여기 찍힌다. 정기결제가 아니라 "한 번 결제 = 30일 이용"이라, 매번 결제할
+// 때마다 이 값을 결제 시점 기준 30일 뒤로 새로 맞춘다(누적되지 않음). 값이 없으면(NULL) 아직
+// 결제한 적 없는 사용자라는 뜻이고, 이 경우 예전처럼 크레딧 잔액만으로 이용 가능 여부를 판단한다.
+if (!userColumns.includes("access_until")) {
+  db.exec("ALTER TABLE users ADD COLUMN access_until TEXT");
+}
+// orders 테이블에 무통장입금 지원 컬럼 추가 (기존 배포 DB 대비).
+const orderColumns = db.prepare("PRAGMA table_info(orders)").all().map((c) => c.name);
+if (!orderColumns.includes("method")) {
+  db.exec("ALTER TABLE orders ADD COLUMN method TEXT NOT NULL DEFAULT 'toss'");
+}
+if (!orderColumns.includes("depositor_name")) {
+  db.exec("ALTER TABLE orders ADD COLUMN depositor_name TEXT");
 }
 
 /* ────────────────────────── users ────────────────────────── */
@@ -204,6 +271,7 @@ function hydrateUser(row) {
     createdAt: row.created_at,
     promoOptout: !!row.promo_optout,
     referredBy: row.referred_by || null,
+    accessUntil: row.access_until || null,
     usage, cardnewsHistory,
     social: hydrateSocial(socialRow),
   };
@@ -238,6 +306,9 @@ function updateCompany(id, name, logo) {
 function setPromoOptout(id, optout) {
   db.prepare("UPDATE users SET promo_optout = ? WHERE id = ?").run(optout ? 1 : 0, id);
 }
+function setAccessUntil(id, isoDate) {
+  db.prepare("UPDATE users SET access_until = ? WHERE id = ?").run(isoDate, id);
+}
 const addUsageStmt = db.prepare(
   `INSERT INTO usage_log (user_id, at, amount, kind, label, question, agents)
    VALUES (@userId, @at, @amount, @kind, @label, @question, @agents)`
@@ -266,15 +337,100 @@ function addCardnewsHistory(userId, entry) {
 
 function createOrder(orderId, o) {
   db.prepare(
-    `INSERT INTO orders (order_id, user_id, credits, amount, label, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(orderId, o.userId, o.credits, o.amount, o.label, o.status, o.createdAt);
+    `INSERT INTO orders (order_id, user_id, credits, amount, label, status, created_at, method, depositor_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(orderId, o.userId, o.credits, o.amount, o.label, o.status, o.createdAt, o.method || "toss", o.depositorName || null);
 }
 function getOrder(orderId) {
   return db.prepare("SELECT * FROM orders WHERE order_id = ?").get(orderId) || null;
 }
+// 무통장입금 신청 대기 목록 — 관리자가 실제 입금 내역과 대조해서 승인/거절한다.
+function listPendingBankTransferOrders() {
+  return db
+    .prepare(
+      `SELECT o.*, u.email as user_email FROM orders o
+       LEFT JOIN users u ON u.id = o.user_id
+       WHERE o.method = 'bank_transfer' AND o.status = 'pending'
+       ORDER BY o.created_at ASC`
+    )
+    .all();
+}
+function rejectOrder(orderId) {
+  db.prepare("UPDATE orders SET status = 'rejected' WHERE order_id = ?").run(orderId);
+}
 function markOrderPaid(orderId) {
   db.prepare("UPDATE orders SET status = 'paid' WHERE order_id = ?").run(orderId);
+}
+
+/* ────────────────────────── 정기결제(구독) ────────────────────────── */
+
+function upsertSubscription(userId, s) {
+  db.prepare(
+    `INSERT INTO subscriptions (user_id, billing_key_enc, customer_key, status, current_period_end, canceled_at, last_payment_at, last_failure_reason, created_at, updated_at)
+     VALUES (@userId, @billingKeyEnc, @customerKey, @status, @currentPeriodEnd, @canceledAt, @lastPaymentAt, @lastFailureReason, @createdAt, @updatedAt)
+     ON CONFLICT(user_id) DO UPDATE SET
+       billing_key_enc = excluded.billing_key_enc,
+       customer_key = excluded.customer_key,
+       status = excluded.status,
+       current_period_end = excluded.current_period_end,
+       canceled_at = excluded.canceled_at,
+       last_payment_at = excluded.last_payment_at,
+       last_failure_reason = excluded.last_failure_reason,
+       updated_at = excluded.updated_at`
+  ).run({
+    userId,
+    billingKeyEnc: s.billingKeyEnc != null ? s.billingKeyEnc : null,
+    customerKey: s.customerKey != null ? s.customerKey : null,
+    status: s.status,
+    currentPeriodEnd: s.currentPeriodEnd || null,
+    canceledAt: s.canceledAt || null,
+    lastPaymentAt: s.lastPaymentAt || null,
+    lastFailureReason: s.lastFailureReason || null,
+    createdAt: s.createdAt || new Date().toISOString(),
+    updatedAt: s.updatedAt || new Date().toISOString(),
+  });
+}
+function getSubscription(userId) {
+  const row = db.prepare("SELECT * FROM subscriptions WHERE user_id = ?").get(userId);
+  if (!row) return null;
+  return {
+    userId: row.user_id,
+    billingKeyEnc: row.billing_key_enc,
+    customerKey: row.customer_key,
+    status: row.status,
+    currentPeriodEnd: row.current_period_end,
+    canceledAt: row.canceled_at,
+    lastPaymentAt: row.last_payment_at,
+    lastFailureReason: row.last_failure_reason,
+  };
+}
+function updateSubscriptionFields(userId, fields) {
+  const row = db.prepare("SELECT * FROM subscriptions WHERE user_id = ?").get(userId);
+  if (!row) return;
+  const merged = {
+    status: fields.status !== undefined ? fields.status : row.status,
+    current_period_end: fields.currentPeriodEnd !== undefined ? fields.currentPeriodEnd : row.current_period_end,
+    canceled_at: fields.canceledAt !== undefined ? fields.canceledAt : row.canceled_at,
+    last_payment_at: fields.lastPaymentAt !== undefined ? fields.lastPaymentAt : row.last_payment_at,
+    last_failure_reason: fields.lastFailureReason !== undefined ? fields.lastFailureReason : row.last_failure_reason,
+  };
+  db.prepare(
+    `UPDATE subscriptions SET status = ?, current_period_end = ?, canceled_at = ?, last_payment_at = ?,
+     last_failure_reason = ?, updated_at = ? WHERE user_id = ?`
+  ).run(merged.status, merged.current_period_end, merged.canceled_at, merged.last_payment_at, merged.last_failure_reason, new Date().toISOString(), userId);
+}
+// 자동 재청구 스케줄러가 쓴다 — 활성 구독 중 이번 결제 기간이 끝난(= 오늘 청구해야 하는) 것들.
+function getDueSubscriptions(nowIso) {
+  return db
+    .prepare("SELECT * FROM subscriptions WHERE status = 'active' AND current_period_end <= ?")
+    .all(nowIso)
+    .map((row) => ({
+      userId: row.user_id, billingKeyEnc: row.billing_key_enc, customerKey: row.customer_key, status: row.status,
+      currentPeriodEnd: row.current_period_end,
+    }));
+}
+function getSubscriptionStats() {
+  return db.prepare("SELECT status, COUNT(*) as count FROM subscriptions GROUP BY status").all();
 }
 
 /* ────────────────────────── 담당자 기억 ────────────────────────── */
@@ -312,6 +468,23 @@ function addKnowledge(userId, role, item) {
 }
 function deleteKnowledge(userId, role, id) {
   db.prepare("DELETE FROM knowledge WHERE user_id = ? AND role = ? AND id = ?").run(userId, role, id);
+}
+
+/* ────────────────────────── 시스템 기본지식 (운영자가 심어두는 전역 전문지식) ────────────────────────── */
+
+function getDefaultKnowledge(role) {
+  return db
+    .prepare("SELECT * FROM default_knowledge WHERE role = ? ORDER BY rowid ASC")
+    .all(role)
+    .map((r) => ({ id: r.id, title: r.title, text: r.text, addedAt: r.added_at }));
+}
+function addDefaultKnowledge(role, item) {
+  db.prepare(
+    `INSERT INTO default_knowledge (id, role, title, text, added_at) VALUES (?, ?, ?, ?, ?)`
+  ).run(item.id, role, item.title, item.text, item.addedAt);
+}
+function deleteDefaultKnowledge(role, id) {
+  db.prepare("DELETE FROM default_knowledge WHERE role = ? AND id = ?").run(role, id);
 }
 
 /* ────────────────────────── 인스타그램 연동 ────────────────────────── */
@@ -373,6 +546,71 @@ function getReferralStats() {
        ORDER BY signups DESC`
     )
     .all();
+}
+
+/* ────────────────────────── AI 품질(헛소리 방지) 측정 ────────────────────────── */
+
+const logManagerVerdictStmt = db.prepare(
+  `INSERT INTO quality_log (type, job_id, user_id, role_key, approved, attempt, at)
+   VALUES ('manager_verdict', ?, ?, ?, ?, ?, ?)`
+);
+function logManagerVerdict(jobId, userId, roleKey, approved, attempt, at) {
+  logManagerVerdictStmt.run(jobId, userId, roleKey, approved ? 1 : 0, attempt, at);
+}
+const logCeoDecisionStmt = db.prepare(
+  `INSERT INTO quality_log (type, job_id, user_id, action, round, at)
+   VALUES ('ceo_decision', ?, ?, ?, ?, ?)`
+);
+function logCeoDecision(jobId, userId, action, round, at) {
+  logCeoDecisionStmt.run(jobId, userId, action, round, at);
+}
+function getQualityStats(sinceIso) {
+  const since = sinceIso ? "AND at >= ?" : "";
+  const params = sinceIso ? [sinceIso] : [];
+
+  const mgr = db
+    .prepare(`SELECT COUNT(*) as total, SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) as rejected
+              FROM quality_log WHERE type = 'manager_verdict' ${since}`)
+    .get(...params);
+  const totalVerdicts = mgr.total || 0;
+  const rejected = mgr.rejected || 0;
+
+  const totalJobs = db
+    .prepare(`SELECT COUNT(DISTINCT job_id) as c FROM quality_log WHERE type = 'ceo_decision' ${since}`)
+    .get(...params).c || 0;
+  const approvedFirstTry = db
+    .prepare(`SELECT COUNT(DISTINCT job_id) as c FROM quality_log WHERE type = 'ceo_decision' AND round = 1 AND action = 'approve' ${since}`)
+    .get(...params).c || 0;
+  const revisedAtLeastOnce = db
+    .prepare(`SELECT COUNT(DISTINCT job_id) as c FROM quality_log WHERE type = 'ceo_decision' AND action = 'revise' ${since}`)
+    .get(...params).c || 0;
+
+  const byRoleRows = db
+    .prepare(`SELECT role_key, COUNT(*) as sample, SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) as rejected
+              FROM quality_log WHERE type = 'manager_verdict' ${since} GROUP BY role_key`)
+    .all(...params);
+  const byRole = {};
+  byRoleRows.forEach((r) => {
+    byRole[r.role_key] = {
+      reject_rate: r.sample ? Math.round((r.rejected / r.sample) * 1000) / 10 : 0,
+      sample: r.sample,
+    };
+  });
+
+  return {
+    manager: {
+      total_verdicts: totalVerdicts,
+      rejected,
+      reject_rate: totalVerdicts ? Math.round((rejected / totalVerdicts) * 1000) / 10 : 0,
+    },
+    ceo: {
+      total_jobs: totalJobs,
+      approved_first_try: approvedFirstTry,
+      revised_at_least_once: revisedAtLeastOnce,
+      first_approval_rate: totalJobs ? Math.round((approvedFirstTry / totalJobs) * 1000) / 10 : 0,
+    },
+    by_role: byRole,
+  };
 }
 
 /* ────────────────────────── 업무(job) 진행 기록 — 이탈 지점 분석용 ────────────────────────── */
@@ -478,11 +716,13 @@ function getRecentSignups(limit) {
 }
 
 module.exports = {
-  getUserById, getUserByEmail, emailExists, createUser, updateCredits, updateCompany, setPromoOptout,
+  getUserById, getUserByEmail, emailExists, createUser, updateCredits, updateCompany, setPromoOptout, setAccessUntil,
   addUsage, addCardnewsHistory,
-  createOrder, getOrder, markOrderPaid,
+  createOrder, getOrder, markOrderPaid, listPendingBankTransferOrders, rejectOrder,
+  upsertSubscription, getSubscription, updateSubscriptionFields, getDueSubscriptions, getSubscriptionStats,
   getMemoryEntries, addMemoryEntry,
   getKnowledge, addKnowledge, deleteKnowledge,
+  getDefaultKnowledge, addDefaultKnowledge, deleteDefaultKnowledge,
   setSocialInstagram, getSocialInstagramByIgUserId,
   addFeedback, getFeedbackStats,
   hasGuestDevice, recordGuestDevice,
@@ -490,4 +730,5 @@ module.exports = {
   createReferralCode, referralCodeExists, listReferralCodes, getReferralStats,
   createJobLog, updateJobLogStatus, getJobStats, getAgentPopularity, getRecentQuestions,
   getUserStats, getRecentSignups,
+  logManagerVerdict, logCeoDecision, getQualityStats,
 };

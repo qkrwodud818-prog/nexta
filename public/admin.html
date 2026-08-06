@@ -85,6 +85,12 @@
   </div>
 
   <div class="card">
+    <h2>💰 무통장입금 확인 대기</h2>
+    <p style="font-size:12.5px;color:var(--soft);margin:0 0 12px;">실제 계좌에 입금됐는지 확인하신 후에만 승인해 주세요.</p>
+    <table id="bankTable"><thead><tr><th>신청시각</th><th>이메일</th><th>입금자명</th><th>상품</th><th>금액</th><th></th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
     <h2>인플루언서 추천 코드</h2>
     <div class="refform">
       <input id="refCode" placeholder="코드 (영문/숫자, 예: yuchan)">
@@ -179,6 +185,9 @@ function renderDashboard(d){
     return '<tr><td>'+esc(r.role_key)+'</td><td>'+r.calls+'</td><td>$'+Number(r.total_cost_usd||0).toFixed(4)+'</td><td>$'+Number(r.avg_cost_usd||0).toFixed(4)+'</td></tr>';
   }).join('') : '<tr><td colspan="4" class="empty">아직 없어요.</td></tr>';
 
+  // 무통장입금 대기
+  renderBankOrders(d.pendingBankOrders);
+
   // 추천 코드
   renderReferrals(d.referrals);
 
@@ -187,6 +196,27 @@ function renderDashboard(d){
   sBody.innerHTML = d.recentSignups.length ? d.recentSignups.map(function(s){
     return '<tr><td>'+esc(s.email)+'</td><td>'+(s.guest?'체험':'정회원')+'</td><td>'+s.credits+'</td></tr>';
   }).join('') : '<tr><td colspan="3" class="empty">아직 없어요.</td></tr>';
+}
+
+function renderBankOrders(list){
+  var body = document.querySelector('#bankTable tbody');
+  if(!list || !list.length){ body.innerHTML = '<tr><td colspan="6" class="empty">대기 중인 입금이 없어요.</td></tr>'; return; }
+  body.innerHTML = list.map(function(o){
+    return '<tr><td>'+esc(o.created_at||'')+'</td><td>'+esc(o.user_email||'')+'</td><td><b>'+esc(o.depositor_name||'')+'</b></td>'
+      + '<td>'+esc(o.label||'')+'</td><td>'+Number(o.amount||0).toLocaleString()+'원</td>'
+      + '<td><button class="refresh" style="color:#15803d;" onclick="confirmBankOrder(\''+esc(o.order_id)+'\')">승인</button> '
+      + '<button class="refresh" style="color:var(--red);" onclick="rejectBankOrder(\''+esc(o.order_id)+'\')">거절</button></td></tr>';
+  }).join('');
+}
+function confirmBankOrder(orderId){
+  if(!confirm('실제로 입금이 확인되셨나요? 승인하면 바로 크레딧이 지급됩니다.')) return;
+  fetch('/api/admin/bank-orders/'+encodeURIComponent(orderId)+'/confirm?key='+encodeURIComponent(ADMIN_KEY), { method:'POST' })
+    .then(function(r){ return r.json(); }).then(function(d){ renderBankOrders(d.orders); });
+}
+function rejectBankOrder(orderId){
+  if(!confirm('이 입금 신청을 거절할까요?')) return;
+  fetch('/api/admin/bank-orders/'+encodeURIComponent(orderId)+'/reject?key='+encodeURIComponent(ADMIN_KEY), { method:'POST' })
+    .then(function(r){ return r.json(); }).then(function(d){ renderBankOrders(d.orders); });
 }
 
 function renderReferrals(list){

@@ -232,6 +232,20 @@ const CREDIT_PACKAGES = {
   large: { credits: 4000, amount: 28000, label: "4,000 크레딧 (30% 더)" },
 };
 
+// 무통장입금 — PG 심사 없이 지금 바로 쓸 수 있는 결제 수단. 자동이 아니라 대표님이 실제
+// 입금을 확인하고 관리자 페이지에서 승인해야 크레딧이 들어간다(정기결제는 지원 안 함,
+// 1회성 충전 전용). .env에 은행 정보를 넣어야 화면에 노출된다.
+const BANK_NAME = process.env.BANK_NAME || "";
+const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || "";
+const BANK_ACCOUNT_HOLDER = process.env.BANK_ACCOUNT_HOLDER || "";
+
+// 정기결제(월 구독) — 이 플랜 하나만 우선 제공한다. 토스페이먼츠 "빌링(자동결제)"는
+// 결제위젯(CREDIT_PACKAGES, 1회성)과 별개 승인/API라 사업자등록증으로 빌링 심사를
+// 통과해야 실제로 청구가 된다. 심사 전까지는 /api/subscription/config가 enabled:false를
+// 내려줘서 화면에 "준비 중"으로만 보인다 — 잘못된 키로 구독 시도가 되는 일은 없다.
+const SUBSCRIPTION_PLAN = { credits: 1500, amount: 12000, label: "넥스타 월 구독 (1,500 크레딧)" };
+const SUBSCRIPTION_PERIOD_MS = 30 * 24 * 60 * 60 * 1000; // 30일
+
 function hashPassword(password, salt) {
   salt = salt || crypto.randomBytes(16).toString("hex");
   const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
@@ -373,7 +387,15 @@ function publicUser(u) {
     company: u.company || { name: "", logo: "" },
     cardnewsHistory: (u.cardnewsHistory || []).slice(-20).reverse(),
     promoOptout: !!u.promoOptout,
+    accessUntil: u.accessUntil || null,
   };
+}
+// 정기결제가 아니라 "결제 1회 = 결제일로부터 30일" 방식이라, 한 번도 결제한 적 없는
+// 사용자(accessUntil 없음)는 예전처럼 크레딧 잔액만으로 이용 가능 여부를 판단하고,
+// 결제 이력이 있는 사용자는 그 30일이 지나면 크레딧이 남아 있어도 더 이상 쓸 수 없다.
+function hasValidAccess(user) {
+  if (!user.accessUntil) return true;
+  return new Date(user.accessUntil).getTime() > Date.now();
 }
 // 작업이 실제로 끝나(보고서가 나온) 시점에 한 번만 차감한다 — 도중에 오류가 나면 차감하지 않는다.
 function chargeUser(userId, amount, meta) {
@@ -402,15 +424,26 @@ function addMemory(userId, roleKey, question, summary) {
   });
 }
 
+// 기본지식(운영자가 미리 심어둔 전문가 자료) + 유저 개인지식을 둘 다 프롬프트에 넣는다.
+// 예산을 나눠서 유저 자료가 많다고 기본지식이 밀려서 잘리는 일이 없게 한다.
 function getKnowledgeContext(userId, role) {
-  const list = db.getKnowledge(userId, role);
-  if (!list.length) return "";
-  let joined = list.map((k) => "▶ " + k.title + "\n" + k.text).join("\n\n");
-  if (joined.length > 6000) joined = joined.slice(0, 6000) + "\n...(자료가 길어 일부만 표시됨)";
-  return (
-    "[대표님이 미리 등록해 둔 전문 지식/참고자료 — 이 내용을 최우선 참고 자료로 활용한다]\n" +
-    joined + "\n\n"
-  );
+  let out = "";
+
+  const defaults = db.getDefaultKnowledge(role);
+  if (defaults.length) {
+    let joined = defaults.map((k) => "▶ " + k.title + "\n" + k.text).join("\n\n");
+    if (joined.length > 5000) joined = joined.slice(0, 5000) + "\n...(자료가 길어 일부만 표시됨)";
+    out += "[넥스타 전문가 기본지식 — 이 역할의 핵심 원칙. 검증된 실제 이론/기준이니 최우선으로 따른다]\n" + joined + "\n\n";
+  }
+
+  const userList = db.getKnowledge(userId, role);
+  if (userList.length) {
+    let joined = userList.map((k) => "▶ " + k.title + "\n" + k.text).join("\n\n");
+    if (joined.length > 4000) joined = joined.slice(0, 4000) + "\n...(자료가 길어 일부만 표시됨)";
+    out += "[대표님이 개인적으로 등록한 추가 자료 — 기본지식과 함께 참고한다]\n" + joined + "\n\n";
+  }
+
+  return out;
 }
 
 // 브랜드 가이드 — 특정 담당자 전용이 아니라 '모든' 담당자가 공통으로 지켜야 하는 말투·금칙어·규칙.
@@ -473,6 +506,15 @@ function safeUpdateJobLogStatus(jobId, status, errorMessage, updatedAt) {
 function safeCreateJobLog(jobId, userId, kind, question, agents, createdAt) {
   try { db.createJobLog(jobId, userId, kind, question, agents, createdAt); }
   catch (e) { console.warn("[업무 기록 생성 실패 — 무시하고 계속]", e.message); }
+}
+// 품질(헛소리 방지) 측정 로그도 통계용일 뿐이라 실패해도 실제 업무 흐름을 막으면 안 된다.
+function safeLogManagerVerdict(jobId, userId, roleKey, approved, attempt, at) {
+  try { db.logManagerVerdict(jobId, userId, roleKey, approved, attempt, at); }
+  catch (e) { console.warn("[품질 로그(검수 판정) 기록 실패 — 무시하고 계속]", e.message); }
+}
+function safeLogCeoDecision(jobId, userId, action, round, at) {
+  try { db.logCeoDecision(jobId, userId, action, round, at); }
+  catch (e) { console.warn("[품질 로그(대표 결정) 기록 실패 — 무시하고 계속]", e.message); }
 }
 
 function waitForCeo(job) {
@@ -573,6 +615,65 @@ const SPECIALISTS = {
 };
 const SPECIALIST_KEYS = Object.keys(SPECIALISTS);
 
+/* ────────────────────────── 역할별 전문화 페르소나 ──────────────────────────
+ * 실제로 존재하는 검증 가능한 이론/원칙만 담는다(지어낸 "전문성"은 헛소리 방지 취지에
+ * 반한다). 근거: AIDA(Elias St. Elmo Lewis 판매원칙에서 유래), PAS(카피라이팅 고전
+ * 구조), 네이버 C-Rank·D.I.A(네이버 공식 블로그가 설명한 자사 검색 랭킹 로직),
+ * BEP(회계학 기본 개념), AARRR·Sean Ellis Test(그로스해킹 업계 표준),
+ * SPIN Selling(Neil Rackham 영업 방법론), STAR 기법(구조화 면접 표준),
+ * Lean Startup(Eric Ries). roleKey(SPECIALISTS[].roleKey) 기준으로 매핑한다.
+ */
+const SPECIALIST_PERSONAS = {
+  전문_카피라이터: {
+    systemNote: "당신은 AIDA(주목-관심-욕구-행동), PAS(문제-확대-해결) 같은 실전 카피 프레임워크를 상황에 맞게 골라 쓰는 카피라이터입니다.",
+    outputHint: "후킹 문구는 15자 이내로 짧게, 본문은 상품의 실제 특징에서 나온 구체적 이유로 씁니다. 과장된 최상급 표현·검증 안 된 효능은 쓰지 않습니다.",
+  },
+  전문_이커머스: {
+    systemNote: "당신은 상세페이지 구성 원칙과 가격심리(단수가격 vs 프리미엄 프라이싱), 오픈마켓 랭킹 요소(리뷰·응답속도)를 아는 이커머스 운영 담당입니다.",
+    outputHint: "가격 전략을 제안할 때는 상품이 저가·실용재인지 고관여·선물용인지부터 구분해서 답하세요.",
+  },
+  전문_재무분석: {
+    systemNote: "당신은 손익분기점(BEP), 원가율/마진율, 현금흐름 같은 실제 재무 개념을 정확한 계산식과 함께 설명하는 소상공인 전문 재무분석가입니다.",
+    outputHint: "숫자를 다룰 때는 반드시 계산 과정을 보여주고, 입력된 정보로 계산 가능한 범위까지만 답하며 부족한 정보는 명시적으로 요청하세요. 추측성 숫자를 지어내지 마세요.",
+  },
+  전문_SEO: {
+    systemNote: "당신은 네이버 검색엔진 최적화 전문가입니다. C-Rank(블로그 단위 신뢰도·주제 집중도)와 D.I.A(개별 문서의 검색의도 적합도) 같은 네이버가 공식적으로 설명한 랭킹 로직의 핵심 원칙을 반영해 조언합니다.",
+    outputHint: "키워드를 인위적으로 반복 삽입하라고 조언하지 말고, 실제 검색 의도에 맞는 정보성 콘텐츠 구조 중심으로 답하세요.",
+  },
+  전문_성장코치: {
+    systemNote: "당신은 PMF 판단 기준(Sean Ellis Test: '매우 실망할 것 같다' 응답 40% 이상)과 AARRR(획득-활성화-유지-추천-매출) 퍼널 같은 그로스해킹 표준 프레임을 아는 성장 코치입니다.",
+    outputHint: "지금 어느 단계(획득/활성화/유지/추천/매출)가 가장 새는 구멍인지부터 짚고 우선순위를 제안하세요.",
+  },
+  전문_영업관리: {
+    systemNote: "당신은 SPIN Selling(상황-문제-시사-해결 질문 구조) 같은 검증된 영업 방법론과 영업 퍼널(리드-상담-제안-협상-계약) 단계별 관리 원칙을 아는 영업관리 담당입니다.",
+    outputHint: "일방적인 제품 설명보다, 고객이 스스로 필요성을 말하게 만드는 질문 구조를 제안하세요.",
+  },
+  전문_고객문의: {
+    systemNote: "당신은 CS 응대 원칙(공감 → 사실확인 → 해결책 → 후속조치 순서)을 따르는 고객문의 응대 담당입니다.",
+    outputHint: "회사가 지킬 수 없는 약속(정확한 배송일 단정 등)을 하지 말고, 사과와 공감을 원인 설명보다 먼저 배치하세요.",
+  },
+  전문_이메일: {
+    systemNote: "당신은 이메일 마케팅 기본 구조(제목이 오픈률을 좌우, 본문 첫 줄에 핵심, CTA는 하나만)를 아는 이메일 담당입니다.",
+    outputHint: "이메일 하나에 행동 유도(CTA)는 하나만 넣으세요.",
+  },
+  전문_채용: {
+    systemNote: "당신은 채용 공고문 작성 원칙과 STAR 기법(상황-과제-행동-결과)으로 지원자 경험을 구조화해서 검토하는 채용 담당입니다.",
+    outputHint: "자격요건에서 '우대'와 '필수'를 명확히 구분하세요 — 우대를 필수처럼 적으면 적합한 지원자도 지레 포기합니다.",
+  },
+  전문_전략기획: {
+    systemNote: "당신은 린 스타트업(MVP로 빠르게 검증 후 반영) 방법론과 PMF 판단 기준을 아는 전략기획 담당입니다.",
+    outputHint: "전면 투자를 제안하기 전에, 적은 비용으로 실제 수요를 먼저 확인할 방법(사전예약, 소량 테스트 등)부터 제시하세요.",
+  },
+  전문_SNS콘텐츠: {
+    systemNote: "당신은 저장·공유·댓글 같은 적극적 반응이 도달에 유리하다는 인스타그램 공식 언급 원칙과 카드뉴스 완독률 원칙(장당 메시지 하나, 다음 장 유도)을 아는 SNS·블로그 콘텐츠 담당입니다.",
+    outputHint: "단순 홍보 문구보다 저장하고 싶은 정보성 구성이나 댓글을 유도하는 질문형 마무리를 우선하세요.",
+  },
+  전문_비서: {
+    systemNote: "당신은 시선 흐름(삼분할 구도), 명도 대비, 여백 활용 같은 기본 이미지 구성 원칙을 아는 이미지 기획 담당입니다.",
+    outputHint: "요소를 욱여넣지 말고, 핵심 메시지 하나에 집중한 구도를 제안하세요.",
+  },
+};
+
 /* ────────────────────────── 프롬프트 ────────────────────────── */
 
 const 한국어전용 =
@@ -581,10 +682,19 @@ const 한국어전용 =
   "(예: OpenAI → 오픈AI). 이 규칙을 어기면 안 됩니다.\n\n";
 
 function 전문가지시(spec, question, ceoFeedback, reworkFeedback, memoryCtx, knowledgeCtx, brandCtx) {
+  const persona = SPECIALIST_PERSONAS[spec.roleKey];
+  // Lost-in-the-Middle 대응: 프롬프트가 길어질수록(지식/기억/이전 피드백이 쌓일수록) 모델이
+  // 중간에 낀 지시를 놓치기 쉽다. 그래서 "이번에 가장 중요한 지시"를 맨 끝(질문 바로 다음,
+  // 실제로 답을 쓰기 직전)에 짧게 한 번 더 반복한다.
+  const 이번라운드핵심 = reworkFeedback
+    ? "이번 라운드에서 가장 먼저 고쳐야 할 것: " + reworkFeedback
+    : (ceoFeedback ? "대표님이 이번에 가장 원하는 것: " + ceoFeedback : "");
+
   return (
     한국어전용 +
     "당신은 1인 사업가(대표)를 돕는 AI 직원이며, 담당 역할은 [" + spec.label + "]입니다.\n" +
     "담당 설명: " + spec.desc + "\n" +
+    (persona ? persona.systemNote + "\n" : "") +
     "중요: 다른 담당자와 이야기를 나누지 않습니다. 오직 당신의 담당 범위 안에서만, 아는 만큼 정확하게 답하세요.\n\n" +
     (brandCtx || "") +
     knowledgeCtx +
@@ -594,10 +704,15 @@ function 전문가지시(spec, question, ceoFeedback, reworkFeedback, memoryCtx,
     (reworkFeedback ? "[총괄AI의 보완 지시 — 반드시 반영해서 다시 작성]\n" + reworkFeedback + "\n\n" : "") +
     "작성 규칙:\n" +
     "- 담당 역할 범위 안에서만 답한다. 다른 담당자 몫의 일은 하지 않는다.\n" +
-    "- 확인된 사실만 쓰고, 확실하지 않으면 '확인 안 됨'이라고 솔직히 쓴다. 지어내지 않는다.\n" +
+    "- 제공된 지식·검색결과·자료에 없는 사실은 지어내지 않는다. 없으면 없다고 표시한다.\n" +
+    "- 확실하지 않은 내용은 추측해서 단정짓지 말고, '확인이 필요합니다' 또는 '추가 정보가 없어 " +
+    "판단이 어렵습니다'라고 솔직히 답해도 된다. 근거 없이 확신하는 것보다 훨씬 낫다.\n" +
     "- 숫자나 시점이 있으면 반드시 함께 적는다.\n" +
     "- 전문용어 없이, 처음 듣는 사람도 이해할 쉬운 말로 쓴다.\n" +
-    "- 실제로 메일을 보내거나 SNS에 게시하거나 결제·구독을 하지 않는다. 초안/제안만 작성한다.\n\n" +
+    "- 실제로 메일을 보내거나 SNS에 게시하거나 결제·구독을 하지 않는다. 초안/제안만 작성한다.\n" +
+    (persona ? "- " + persona.outputHint + "\n" : "") +
+    "\n" +
+    (이번라운드핵심 ? "[다시 한번, 이번에 꼭 반영할 것]\n" + 이번라운드핵심 + "\n\n" : "") +
     "다시 한번 강조: 반드시 100% 한국어로만 작성하세요."
   );
 }
@@ -612,12 +727,16 @@ function 총괄검수지시(question, ceoFeedback, outputs) {
     한국어전용 +
     "당신은 AI 직원팀을 총괄하는 '총괄AI'입니다. 아래는 각 담당자가 서로 대화 없이 독립적으로 " +
     "작업한 결과물입니다. 당신이 할 일:\n" +
-    "1) 신빙성 검사 — 근거 없이 단정하거나 출처가 부실한 부분이 있는지 확인한다.\n" +
+    "1) 신빙성 검사 — 결과물에 있는 핵심 주장(수치, 사실, 추천)을 하나씩 짚어서, 각각 제공된 " +
+    "지식/자료/검색결과로 뒷받침되는지 확인한다. 뒷받침 안 되는 주장이 있으면 feedback에 " +
+    "'어떤 문장의 어떤 주장이 근거 없는지' 구체적으로 지적한다(예: '월 매출 500만원이라는 " +
+    "숫자의 근거가 없음' 처럼 문장을 콕 집어서).\n" +
     "2) 대표님(전문 지식이 없는 1인 사업가) 눈높이에 맞게 정리해서 설명한다.\n" +
     "3) 결과물을 어디에 보관하면 좋을지 추천한다 (파일 보관 / 노션 정리 / 디스코드 공유 중 성격에 맞는 것 하나).\n" +
     "4) 담당자별로 통과(approved:true)/반려(approved:false) 판정을 내린다. 대표님을 오래 기다리게 하면 " +
-    "안 되므로, 완벽하지 않아도 대표가 판단하기에 충분하면 통과시킨다. 핵심 질문을 아예 다루지 않았거나 " +
-    "완전히 지어낸 것으로 보일 때만 반려한다.\n\n" +
+    "안 되므로, 완벽하지 않아도 대표가 판단하기에 충분하면 통과시킨다. 핵심 질문을 아예 다루지 않았거나, " +
+    "뒷받침 안 되는 핵심 주장을 확인 안 됨 표시 없이 단정했거나, 완전히 지어낸 것으로 보일 때만 반려한다. " +
+    "'확인 안 됨'이라고 솔직히 인정한 부분은 반려 사유가 아니다 — 오히려 바람직하다.\n\n" +
     "[대표의 이번 지시]\n" + question + "\n\n" +
     (ceoFeedback ? "[대표님 보완 요청]\n" + ceoFeedback + "\n\n" : "") +
     섹션 + "\n\n" +
@@ -658,6 +777,37 @@ function 카드뉴스카피생성지시(category, productName, price, quantity) 
   );
 }
 
+// 대표가 담당자를 1명만 골랐을 때, 질문이 실제로는 다른 담당자 영역이면 자동으로 인계한다.
+function 라우팅분류지시(question, selectedKey) {
+  const list = SPECIALIST_KEYS.map((k) => "- " + k + ": " + SPECIALISTS[k].desc).join("\n");
+  return (
+    한국어전용 +
+    "아래 [담당자 목록] 중에서 [질문]에 가장 적합한 담당자를 정확히 1명 고르세요.\n" +
+    "확신이 없거나 여러 담당자에 걸쳐 있어 애매하면, 무리해서 바꾸지 말고 원래 선택된 담당자를 " +
+    "그대로 유지하세요(matchesSelection: true). 명백히 다른 담당자 영역일 때만 바꾸세요.\n\n" +
+    "[담당자 목록]\n" + list + "\n\n" +
+    "[대표가 원래 선택한 담당자] " + selectedKey + "\n" +
+    "[질문] " + question + "\n\n" +
+    "JSON만 출력하세요. 다른 말은 쓰지 마세요. reason은 matchesSelection이 false일 때만 " +
+    "한국어 한 문장으로 채우세요.\n" +
+    '{"bestRoleKey": "담당자키", "matchesSelection": true 또는 false, "reason": ""}'
+  );
+}
+async function classifyBestRole(config, question, selectedKey, job) {
+  try {
+    const result = await callWithFallback(
+      config, "라우팅_분류", 라우팅분류지시(question, selectedKey), false, 200,
+      { userId: job.userId, jobId: job.id }
+    );
+    const parsed = parseJSON(result.text);
+    if (!parsed || !SPECIALISTS[parsed.bestRoleKey]) return null;
+    return parsed;
+  } catch (e) {
+    console.warn("[라우팅 분류 실패 — 원래 선택 유지]", e.message);
+    return null;
+  }
+}
+
 /* ────────────────────────── 전체 업무 진행 ────────────────────────── */
 
 async function runPipeline(job) {
@@ -667,6 +817,23 @@ async function runPipeline(job) {
   let ceoFeedback = "";
 
   try {
+    // 자동 역할 라우팅 — 대표가 담당자를 정확히 1명만 골랐을 때만 검토한다.
+    // 복수 선택은 이미 의도적인 선택이므로 라우팅을 건너뛴다(오탐 방지).
+    if (job.routeCheck && agentKeys.length === 1) {
+      const routing = await classifyBestRole(config, question, agentKeys[0], job);
+      if (routing && routing.matchesSelection === false && routing.bestRoleKey !== agentKeys[0]) {
+        const from = agentKeys[0];
+        emit(job, {
+          type: "handoff",
+          from, to: routing.bestRoleKey,
+          fromLabel: SPECIALISTS[from].label, toLabel: SPECIALISTS[routing.bestRoleKey].label,
+          text: "이 질문은 " + SPECIALISTS[routing.bestRoleKey].label + "이에요. 제가 대신 답변할게요" +
+            (routing.reason ? " — " + routing.reason : ""),
+        });
+        agentKeys[0] = routing.bestRoleKey; // job.agentKeys와 같은 배열이라 그대로 반영됨
+      }
+    }
+
     for (let round = 1; round <= MAX_CEO_ROUNDS; round++) {
       emit(job, { type: "round", round, text: round === 1 ? "업무 시작" : "대표님 보완 요청 반영 (" + round + "차)" });
 
@@ -725,6 +892,12 @@ async function runPipeline(job) {
         allCitations = agentKeys.reduce((acc, key) => acc.concat(results[key].citations || []), []);
 
         const verdicts = (reviewJson && reviewJson.verdicts) || {};
+        agentKeys.forEach((key) => {
+          const v = verdicts[key];
+          if (v && typeof v.approved === "boolean") {
+            safeLogManagerVerdict(job.id, job.userId, SPECIALISTS[key].roleKey, v.approved, mAttempt, new Date().toISOString());
+          }
+        });
         const rejected = agentKeys.filter((key) => verdicts[key] && verdicts[key].approved === false);
         const canRetry = mAttempt <= MAX_MANAGER_RETRY && rejected.length > 0;
 
@@ -786,6 +959,7 @@ async function runPipeline(job) {
       safeUpdateJobLogStatus(job.id, "awaiting_approval", null, new Date().toISOString());
 
       const decision = await waitForCeo(job);
+      safeLogCeoDecision(job.id, job.userId, decision.action, round, new Date().toISOString());
 
       if (decision.action === "approve") {
         // 승인된 내용을 각 담당자의 "기억"으로 남긴다 (다음에 이 담당자를 쓸 때 참고됨)
@@ -1074,6 +1248,40 @@ app.get("/api/payment/config", (req, res) => {
   res.json({ enabled: !!(TOSS_CLIENT_KEY && TOSS_SECRET_KEY), clientKey: TOSS_CLIENT_KEY, packages: CREDIT_PACKAGES });
 });
 
+/* ══════════════════════════════════════════════════════════════
+   무통장입금 — 사업자 심사 없이 지금 바로 켤 수 있는 결제 수단.
+   신청 → 대표님이 실제 입금을 눈으로 확인 → /admin.html 또는 curl로 승인 → 그때 크레딧 지급.
+   ══════════════════════════════════════════════════════════════ */
+app.get("/api/payment/bank-transfer/config", (req, res) => {
+  res.json({
+    enabled: !!BANK_ACCOUNT_NUMBER,
+    bank: BANK_NAME, accountNumber: BANK_ACCOUNT_NUMBER, accountHolder: BANK_ACCOUNT_HOLDER,
+    packages: CREDIT_PACKAGES,
+  });
+});
+app.post("/api/payment/bank-transfer/request", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!BANK_ACCOUNT_NUMBER) return res.status(400).json({ error: "무통장입금이 아직 준비되지 않았습니다." });
+
+  const pkgKey = String((req.body && req.body.package) || "");
+  const pkg = CREDIT_PACKAGES[pkgKey];
+  if (!pkg) return res.status(400).json({ error: "존재하지 않는 상품입니다." });
+  const depositorName = String((req.body && req.body.depositorName) || "").trim().slice(0, 40);
+  if (!depositorName) return res.status(400).json({ error: "입금하실 분 성함을 입력해 주세요." });
+
+  const orderId = "bank_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  db.createOrder(orderId, {
+    userId: u.id, credits: pkg.credits, amount: pkg.amount, label: pkg.label,
+    status: "pending", createdAt: nowKR(), method: "bank_transfer", depositorName,
+  });
+  res.json({
+    ok: true, orderId,
+    bank: BANK_NAME, accountNumber: BANK_ACCOUNT_NUMBER, accountHolder: BANK_ACCOUNT_HOLDER,
+    amount: pkg.amount, credits: pkg.credits,
+  });
+});
+
 // 결제 시작 전, 서버가 먼저 "얼마짜리를 사려는지"를 저장해둔다 (결제창에서 금액을 조작해도 나중에 대조해서 막기 위함)
 app.post("/api/payment/create-order", (req, res) => {
   const u = currentUser(req);
@@ -1128,6 +1336,154 @@ app.get("/payment/fail", (req, res) => {
   res.redirect("/?payment=fail");
 });
 
+/* ══════════════════════════════════════════════════════════════
+   정기결제(구독) — 토스페이먼츠 빌링(자동결제) API
+   결제위젯(위 CREDIT_PACKAGES)과는 별개 승인이 필요하다. TOSS_CLIENT_KEY/TOSS_SECRET_KEY가
+   없으면 "준비 중"으로 안내되어 잘못된 키로 구독이 시도되는 일은 없다. 사업자등록증으로
+   빌링 심사를 통과해서 실제 키를 .env에 넣으면 그대로 작동한다.
+   흐름: ① 프런트가 tossPayments.requestBillingAuth()로 카드 등록 → 토스가 브라우저를
+   /api/subscription/billing-success로 돌려보냄 → ② 서버가 빌링키 발급 + 첫 결제 즉시 청구 →
+   ③ 이후 매 30일마다 서버의 스케줄러(chargeRenewal)가 그 빌링키로 자동 재청구.
+   구독을 취소해도 즉시 끊지 않는다 — current_period_end(이미 낸 기간)까지는 그대로 쓸 수
+   있고, 다음 자동 재청구만 안 하는 방식이다.
+   ══════════════════════════════════════════════════════════════ */
+
+async function chargeTossBilling(billingKey, { customerKey, amount, orderId, orderName }) {
+  const resp = await fetch(`https://api.tosspayments.com/v1/billing/${billingKey}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Basic " + Buffer.from(TOSS_SECRET_KEY + ":").toString("base64"),
+    },
+    body: JSON.stringify({ customerKey, amount, orderId, orderName }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.message || "정기결제 청구 실패");
+  return data;
+}
+
+app.get("/api/subscription/config", (req, res) => {
+  res.json({ enabled: !!(TOSS_CLIENT_KEY && TOSS_SECRET_KEY), clientKey: TOSS_CLIENT_KEY, plan: SUBSCRIPTION_PLAN });
+});
+
+app.get("/api/subscription/status", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const sub = db.getSubscription(u.id);
+  if (!sub) return res.json({ subscribed: false });
+  res.json({
+    subscribed: true,
+    status: sub.status,
+    currentPeriodEnd: sub.currentPeriodEnd,
+    canceledAt: sub.canceledAt,
+    lastFailureReason: sub.status === "past_due" ? sub.lastFailureReason : null,
+  });
+});
+
+// 카드 등록(빌링키 발급) 완료 후 토스가 브라우저를 이 주소로 돌려보낸다 (authKey, customerKey 쿼리).
+// customerKey는 프런트가 requestBillingAuth()에 넘긴 값을 토스가 그대로 돌려준 것일 뿐이라
+// (지금은 me.email을 쓴다 — 내부 사용자 id는 클라이언트에 노출하지 않으므로) 우리 쪽 사용자
+// 식별은 이 값이 아니라 항상 로그인 세션(currentUser)으로만 한다.
+app.get("/api/subscription/billing-success", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.redirect("/?subscription=fail");
+  const { authKey, customerKey } = req.query;
+  if (!authKey || !customerKey || !(TOSS_CLIENT_KEY && TOSS_SECRET_KEY)) {
+    return res.redirect("/?subscription=fail");
+  }
+
+  try {
+    const issueResp = await fetch("https://api.tosspayments.com/v1/billing/authorizations/issue", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Basic " + Buffer.from(TOSS_SECRET_KEY + ":").toString("base64"),
+      },
+      body: JSON.stringify({ authKey, customerKey }),
+    });
+    const issueData = await issueResp.json();
+    if (!issueResp.ok) throw new Error(issueData.message || "빌링키 발급 실패");
+    const billingKey = issueData.billingKey;
+
+    const orderId = "sub_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    await chargeTossBilling(billingKey, {
+      customerKey, amount: SUBSCRIPTION_PLAN.amount, orderId, orderName: SUBSCRIPTION_PLAN.label,
+    });
+
+    const now = new Date();
+    const periodEnd = new Date(now.getTime() + SUBSCRIPTION_PERIOD_MS).toISOString();
+    db.upsertSubscription(u.id, {
+      billingKeyEnc: encryptSecret(billingKey), // 빌링키도 카드 자체나 다름없어 평문 저장 금지
+      customerKey, // 재청구할 때도 발급 당시와 같은 값을 써야 하므로 같이 저장해둔다
+      status: "active",
+      currentPeriodEnd: periodEnd,
+      canceledAt: null,
+      lastPaymentAt: now.toISOString(),
+      lastFailureReason: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    });
+    const credits = (u.credits || 0) + SUBSCRIPTION_PLAN.credits;
+    db.updateCredits(u.id, credits, credits);
+    db.setAccessUntil(u.id, periodEnd);
+
+    res.redirect("/?subscription=success");
+  } catch (e) {
+    console.error("[구독 등록 실패]", e.message);
+    res.redirect("/?subscription=fail");
+  }
+});
+
+// 구독 취소 — 즉시 끊지 않는다. 이미 낸 기간(current_period_end)까지는 그대로 쓰고,
+// 다음 자동 재청구만 걸리지 않게 한다.
+app.post("/api/subscription/cancel", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const sub = db.getSubscription(u.id);
+  if (!sub || sub.status !== "active") {
+    return res.status(400).json({ error: "활성 구독이 없습니다." });
+  }
+  db.updateSubscriptionFields(u.id, { status: "canceled", canceledAt: new Date().toISOString() });
+  res.json({ ok: true, currentPeriodEnd: sub.currentPeriodEnd });
+});
+
+// 30일마다 자동 재청구 — Toss는 매 주기마다 알아서 청구해주지 않으므로 우리 서버가
+// 직접 "이번 기간이 끝난 활성 구독"을 찾아서 그 빌링키로 청구를 건다.
+async function chargeRenewal(sub) {
+  try {
+    const billingKey = decryptSecret(sub.billingKeyEnc);
+    const orderId = "subrenew_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    await chargeTossBilling(billingKey, {
+      customerKey: sub.customerKey, amount: SUBSCRIPTION_PLAN.amount, orderId, orderName: SUBSCRIPTION_PLAN.label,
+    });
+
+    const newPeriodEnd = new Date(new Date(sub.currentPeriodEnd).getTime() + SUBSCRIPTION_PERIOD_MS).toISOString();
+    db.updateSubscriptionFields(sub.userId, {
+      status: "active", currentPeriodEnd: newPeriodEnd,
+      lastPaymentAt: new Date().toISOString(), lastFailureReason: null,
+    });
+    const user = db.getUserById(sub.userId);
+    if (user) {
+      const credits = (user.credits || 0) + SUBSCRIPTION_PLAN.credits;
+      db.updateCredits(sub.userId, credits, credits);
+      db.setAccessUntil(sub.userId, newPeriodEnd);
+    }
+    console.log("[정기결제 갱신 성공]", sub.userId);
+  } catch (e) {
+    // 실패(카드 만기 등) — 즉시 이용 중단: access_until을 연장하지 않고 그대로 두면
+    // 이미 지난 시각이라 hasValidAccess()가 자동으로 막아준다. 대표님이 확인할 수 있도록
+    // last_failure_reason에 사유를 남기고, 사용자는 다음에 서비스를 쓰려 할 때 안내 문구를 본다
+    // (이메일·SMS 알림 채널은 없음 — 필요하면 나중에 별도로 연결).
+    console.error("[정기결제 갱신 실패]", sub.userId, e.message);
+    db.updateSubscriptionFields(sub.userId, { status: "past_due", lastFailureReason: String(e.message).slice(0, 300) });
+  }
+}
+const SUBSCRIPTION_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1시간마다 확인
+setInterval(() => {
+  if (!(TOSS_CLIENT_KEY && TOSS_SECRET_KEY)) return;
+  db.getDueSubscriptions(new Date().toISOString()).forEach((sub) => { chargeRenewal(sub); });
+}, SUBSCRIPTION_CHECK_INTERVAL_MS);
+
 // 회사(브랜드) 정보 저장 — 로고·회사명은 사이드바와 보고서 표지에 함께 표시된다.
 app.post("/api/company", (req, res) => {
   const u = currentUser(req);
@@ -1181,6 +1537,9 @@ app.post("/api/social/connect", (req, res) => {
 app.post("/api/social/cardnews", async (req, res) => {
   const u = currentUser(req);
   if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) {
+    return res.status(402).json({ error: "결제 후 30일 이용 기간이 지났습니다. 다시 결제해 주세요.", accessUntil: u.accessUntil });
+  }
   const p = req.body || {};
   if (!p.name || !p.hook) return res.status(400).json({ error: "name, hook은 필수입니다." });
 
@@ -1247,6 +1606,9 @@ const COUPANG_AUTO_MAX_QTY = 5; // 인스타그램 콘텐츠 게시 API 자체 �
 app.post("/api/social/coupang-auto", (req, res) => {
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(user)) {
+    return res.status(402).json({ error: "결제 후 30일 이용 기간이 지났습니다. 다시 결제해 주세요.", accessUntil: user.accessUntil });
+  }
 
   const social = user.social && user.social.instagram;
   if (!social) return res.status(400).json({ error: "먼저 인스타그램 계정을 연결해 주세요 (충전·설정 메뉴)." });
@@ -1321,12 +1683,17 @@ app.post("/webhooks/instagram", async (req, res) => {
 app.post("/api/start", (req, res) => {
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(user)) {
+    return res.status(402).json({ error: "결제 후 30일 이용 기간이 지났습니다. 다시 결제해 주세요.", accessUntil: user.accessUntil });
+  }
 
   const question = String((req.body && req.body.question) || "").trim();
   if (!question) return res.status(400).json({ error: "무엇을 알아봐 드릴지 적어 주세요." });
   if (question.length > 2000) return res.status(400).json({ error: "질문이 너무 깁니다. 2000자 이내로 적어 주세요." });
 
   let agentKeys = Array.isArray(req.body && req.body.agents) ? req.body.agents.filter((k) => SPECIALISTS[k]) : [];
+  // 담당자를 정확히 1명만 골랐을 때만 자동 라우팅 검토 대상 — 복수 선택·미선택(전체)은 건드리지 않는다.
+  const routeCheck = agentKeys.length === 1;
   if (!agentKeys.length) agentKeys = SPECIALIST_KEYS.slice();
 
   const quick = !!(req.body && req.body.quick);
@@ -1337,6 +1704,7 @@ app.post("/api/start", (req, res) => {
   }
 
   const job = createJob(question, agentKeys, user.id, cost, quick);
+  job.routeCheck = routeCheck;
   safeCreateJobLog(job.id, user.id, "pipeline", question, agentKeys, new Date().toISOString());
   res.json({ jobId: job.id, cost });
   runPipeline(job);
@@ -1468,7 +1836,16 @@ app.get("/api/admin/dashboard", requireAdminKey, (req, res) => {
     feedback: db.getFeedbackStats(),
     costByRole: db.getCostSummaryByRole(),
     referrals: db.getReferralStats(),
+    subscriptions: db.getSubscriptionStats(),
+    pendingBankOrders: db.listPendingBankTransferOrders(),
   });
+});
+// AI 품질(헛소리 방지) 측정 — 총괄AI 반려율(방법 A) + 대표 첫승인율(방법 B, 가장 중요한 지표).
+app.get("/api/admin/quality-stats", requireAdminKey, (req, res) => {
+  const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 7));
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const stats = db.getQualityStats(since);
+  res.json({ period_days: days, ...stats });
 });
 app.post("/api/admin/referrals", requireAdminKey, (req, res) => {
   const code = String((req.body && req.body.code) || "").trim();
@@ -1479,6 +1856,65 @@ app.post("/api/admin/referrals", requireAdminKey, (req, res) => {
   if (db.referralCodeExists(code)) return res.status(409).json({ error: "이미 있는 코드입니다." });
   db.createReferralCode(code, label, nowKR());
   res.json({ ok: true, codes: db.listReferralCodes() });
+});
+
+/* ── 무통장입금 승인 (운영자 전용) ──
+   사용법: curl "https://.../api/admin/bank-orders?key=ADMIN_KEY"
+           curl -X POST ".../api/admin/bank-orders/주문번호/confirm?key=ADMIN_KEY"
+           curl -X POST ".../api/admin/bank-orders/주문번호/reject?key=ADMIN_KEY" */
+app.get("/api/admin/bank-orders", requireAdminKey, (req, res) => {
+  res.json({ orders: db.listPendingBankTransferOrders() });
+});
+app.post("/api/admin/bank-orders/:orderId/confirm", requireAdminKey, (req, res) => {
+  const order = db.getOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ error: "주문을 찾을 수 없습니다." });
+  if (order.status !== "pending") return res.status(409).json({ error: "이미 처리된 주문입니다." });
+
+  db.markOrderPaid(order.order_id);
+  const rec = db.getUserById(order.user_id);
+  if (rec) {
+    const credits = (rec.credits || 0) + order.credits;
+    db.updateCredits(rec.id, credits, credits);
+  }
+  res.json({ ok: true, orders: db.listPendingBankTransferOrders() });
+});
+app.post("/api/admin/bank-orders/:orderId/reject", requireAdminKey, (req, res) => {
+  const order = db.getOrder(req.params.orderId);
+  if (!order) return res.status(404).json({ error: "주문을 찾을 수 없습니다." });
+  if (order.status !== "pending") return res.status(409).json({ error: "이미 처리된 주문입니다." });
+  db.rejectOrder(order.order_id);
+  res.json({ ok: true, orders: db.listPendingBankTransferOrders() });
+});
+
+/* ── 역할별 시스템 기본지식 관리 (운영자 전용 — ADMIN_KEY로 보호, 일반 유저 접근 불가) ──
+   사용법: curl "https://.../api/admin/default-knowledge/카피라이터?key=ADMIN_KEY"
+           curl -X POST ".../api/admin/default-knowledge/카피라이터?key=ADMIN_KEY" -d '{"title":"...","text":"..."}'
+           curl -X DELETE ".../api/admin/default-knowledge/카피라이터/아이디?key=ADMIN_KEY" */
+function isValidKnowledgeRole(role) {
+  return !!SPECIALISTS[role] || role === BRAND_KEY;
+}
+app.get("/api/admin/default-knowledge/:role", requireAdminKey, (req, res) => {
+  if (!isValidKnowledgeRole(req.params.role)) return res.status(400).json({ error: "알 수 없는 담당자입니다." });
+  res.json({ items: db.getDefaultKnowledge(req.params.role) });
+});
+app.post("/api/admin/default-knowledge/:role", requireAdminKey, (req, res) => {
+  const role = req.params.role;
+  if (!isValidKnowledgeRole(role)) return res.status(400).json({ error: "알 수 없는 담당자입니다." });
+  const title = String((req.body && req.body.title) || "").trim().slice(0, 80) || "제목 없음";
+  const text = String((req.body && req.body.text) || "").trim();
+  if (!text) return res.status(400).json({ error: "내용을 입력해 주세요." });
+  if (text.length > 20000) return res.status(400).json({ error: "자료가 너무 깁니다. 20000자 이내로 줄여 주세요." });
+  db.addDefaultKnowledge(role, {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    title, text, addedAt: nowKR(),
+  });
+  res.json({ ok: true, items: db.getDefaultKnowledge(role) });
+});
+app.delete("/api/admin/default-knowledge/:role/:id", requireAdminKey, (req, res) => {
+  const role = req.params.role;
+  if (!isValidKnowledgeRole(role)) return res.status(400).json({ error: "알 수 없는 담당자입니다." });
+  db.deleteDefaultKnowledge(role, req.params.id);
+  res.json({ ok: true, items: db.getDefaultKnowledge(role) });
 });
 
 // 전역 에러 처리 — Express 기본 에러 페이지는 서버 내부 파일 경로와 스택 트레이스를
