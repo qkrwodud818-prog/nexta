@@ -227,6 +227,46 @@ if (!orderColumns.includes("method")) {
 if (!orderColumns.includes("depositor_name")) {
   db.exec("ALTER TABLE orders ADD COLUMN depositor_name TEXT");
 }
+// subscriptions.plan: 'standard' | 'pro' — 재청구 때 어느 요금제 금액/크레딧으로 청구할지 알아야 한다.
+const subscriptionColumns = db.prepare("PRAGMA table_info(subscriptions)").all().map((c) => c.name);
+if (!subscriptionColumns.includes("plan")) {
+  db.exec("ALTER TABLE subscriptions ADD COLUMN plan TEXT NOT NULL DEFAULT 'standard'");
+}
+
+/* ────────────────────────── 자동 발행 (보관함 + 예약) ──────────────────────────
+ * 쿠팡은 서버에서 상품 정보를 긁어올 수 없어(차단됨) 북마클릿으로만 가져올 수 있다.
+ * 그래서 사용자가 한가할 때 상품을 보관함(auto_queue)에 미리 담아두고, 예약
+ * (auto_schedules)에 걸린 시각이 되면 스케줄러가 보관함에서 하나씩 꺼내 발행한다.
+ * "일요일에 10개 담아두면 열흘간 알아서 올라간다"가 이 구조의 목적이다.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS auto_queue (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    price TEXT,
+    image_url TEXT,
+    category TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | done | failed
+    error TEXT,
+    created_at TEXT NOT NULL,
+    posted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS auto_queue_user_status_idx
+    ON auto_queue (user_id, status, created_at);
+
+  CREATE TABLE IF NOT EXISTS auto_schedules (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    hour INTEGER NOT NULL DEFAULT 8,          -- 발행 시각(KST 0~23시)
+    quantity INTEGER NOT NULL DEFAULT 2,      -- 상품 1건당 만들 카드뉴스 수
+    comment_keyword TEXT NOT NULL DEFAULT '정보',
+    last_run_on TEXT,                         -- 마지막 실행 날짜(KST, YYYY-MM-DD) — 하루 1회 보장
+    last_result TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
 
 /* ────────────────────────── users ────────────────────────── */
 
@@ -366,12 +406,13 @@ function markOrderPaid(orderId) {
 
 function upsertSubscription(userId, s) {
   db.prepare(
-    `INSERT INTO subscriptions (user_id, billing_key_enc, customer_key, status, current_period_end, canceled_at, last_payment_at, last_failure_reason, created_at, updated_at)
-     VALUES (@userId, @billingKeyEnc, @customerKey, @status, @currentPeriodEnd, @canceledAt, @lastPaymentAt, @lastFailureReason, @createdAt, @updatedAt)
+    `INSERT INTO subscriptions (user_id, billing_key_enc, customer_key, status, plan, current_period_end, canceled_at, last_payment_at, last_failure_reason, created_at, updated_at)
+     VALUES (@userId, @billingKeyEnc, @customerKey, @status, @plan, @currentPeriodEnd, @canceledAt, @lastPaymentAt, @lastFailureReason, @createdAt, @updatedAt)
      ON CONFLICT(user_id) DO UPDATE SET
        billing_key_enc = excluded.billing_key_enc,
        customer_key = excluded.customer_key,
        status = excluded.status,
+       plan = excluded.plan,
        current_period_end = excluded.current_period_end,
        canceled_at = excluded.canceled_at,
        last_payment_at = excluded.last_payment_at,
@@ -382,6 +423,7 @@ function upsertSubscription(userId, s) {
     billingKeyEnc: s.billingKeyEnc != null ? s.billingKeyEnc : null,
     customerKey: s.customerKey != null ? s.customerKey : null,
     status: s.status,
+    plan: s.plan || "standard",
     currentPeriodEnd: s.currentPeriodEnd || null,
     canceledAt: s.canceledAt || null,
     lastPaymentAt: s.lastPaymentAt || null,
@@ -398,6 +440,7 @@ function getSubscription(userId) {
     billingKeyEnc: row.billing_key_enc,
     customerKey: row.customer_key,
     status: row.status,
+    plan: row.plan || "standard",
     currentPeriodEnd: row.current_period_end,
     canceledAt: row.canceled_at,
     lastPaymentAt: row.last_payment_at,
@@ -715,7 +758,88 @@ function getRecentSignups(limit) {
     .map((r) => ({ id: r.id, email: r.email, guest: !!r.guest, credits: r.credits, createdAt: r.created_at }));
 }
 
+/* ────────────────────────── 자동 발행 (보관함 + 예약) ────────────────────────── */
+
+function hydrateQueueItem(row) {
+  return {
+    id: row.id, name: row.name, price: row.price || "", imageUrl: row.image_url || "",
+    category: row.category, status: row.status, error: row.error || null,
+    createdAt: row.created_at, postedAt: row.posted_at || null,
+  };
+}
+function addQueueItem(userId, item) {
+  db.prepare(
+    `INSERT INTO auto_queue (id, user_id, name, price, image_url, category, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`
+  ).run(item.id, userId, item.name, item.price || "", item.imageUrl || "", item.category, item.createdAt);
+}
+function listQueue(userId, limit) {
+  return db
+    .prepare("SELECT * FROM auto_queue WHERE user_id = ? ORDER BY created_at DESC LIMIT ?")
+    .all(userId, limit || 50)
+    .map(hydrateQueueItem);
+}
+function countPendingQueue(userId) {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM auto_queue WHERE user_id = ? AND status = 'pending'").get(userId);
+  return Number(row?.n || 0);
+}
+/** 예약 실행 때 꺼낼 다음 상품 — 먼저 담은 것부터(FIFO). */
+function nextPendingQueueItem(userId) {
+  const row = db
+    .prepare("SELECT * FROM auto_queue WHERE user_id = ? AND status = 'pending' ORDER BY created_at ASC LIMIT 1")
+    .get(userId);
+  return row ? hydrateQueueItem(row) : null;
+}
+function markQueueItem(id, status, error, postedAt) {
+  db.prepare("UPDATE auto_queue SET status = ?, error = ?, posted_at = ? WHERE id = ?")
+    .run(status, error || null, postedAt || null, id);
+}
+function deleteQueueItem(userId, id) {
+  db.prepare("DELETE FROM auto_queue WHERE id = ? AND user_id = ?").run(id, userId);
+}
+
+function hydrateSchedule(row) {
+  if (!row) return null;
+  return {
+    userId: row.user_id, enabled: !!row.enabled, hour: row.hour, quantity: row.quantity,
+    commentKeyword: row.comment_keyword, lastRunOn: row.last_run_on || null,
+    lastResult: row.last_result || null,
+  };
+}
+function getSchedule(userId) {
+  return hydrateSchedule(db.prepare("SELECT * FROM auto_schedules WHERE user_id = ?").get(userId));
+}
+function upsertSchedule(userId, s) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO auto_schedules (user_id, enabled, hour, quantity, comment_keyword, created_at, updated_at)
+     VALUES (@userId, @enabled, @hour, @quantity, @commentKeyword, @now, @now)
+     ON CONFLICT(user_id) DO UPDATE SET
+       enabled = excluded.enabled, hour = excluded.hour, quantity = excluded.quantity,
+       comment_keyword = excluded.comment_keyword, updated_at = excluded.updated_at`
+  ).run({
+    userId, enabled: s.enabled ? 1 : 0, hour: s.hour, quantity: s.quantity,
+    commentKeyword: s.commentKeyword || "정보", now,
+  });
+}
+/** 오늘(KST) 아직 안 돈, 예약 시각이 지난 활성 예약들. */
+function getDueSchedules(todayKst, hourKst) {
+  return db
+    .prepare(
+      `SELECT * FROM auto_schedules
+       WHERE enabled = 1 AND hour <= ? AND (last_run_on IS NULL OR last_run_on <> ?)`
+    )
+    .all(hourKst, todayKst)
+    .map(hydrateSchedule);
+}
+function markScheduleRun(userId, todayKst, result) {
+  db.prepare("UPDATE auto_schedules SET last_run_on = ?, last_result = ?, updated_at = ? WHERE user_id = ?")
+    .run(todayKst, String(result || "").slice(0, 300), new Date().toISOString(), userId);
+}
+
 module.exports = {
+  addQueueItem, listQueue, countPendingQueue, nextPendingQueueItem, markQueueItem, deleteQueueItem,
+  getSchedule, upsertSchedule, getDueSchedules, markScheduleRun,
   getUserById, getUserByEmail, emailExists, createUser, updateCredits, updateCompany, setPromoOptout, setAccessUntil,
   addUsage, addCardnewsHistory,
   createOrder, getOrder, markOrderPaid, listPendingBankTransferOrders, rejectOrder,

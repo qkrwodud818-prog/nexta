@@ -211,12 +211,10 @@ async function callWithFallback(config, roleKey, prompt, useSearch, maxTokens, l
  * data/nexta.db (SQLite)에 저장한다 — 실제 DB이므로 사용자별 행만 갱신되고
  * 동시 요청에도 안전하다. 단, 무료 호스팅(Render 등)에서 재배포 시 디스크가
  * 초기화될 수 있는 문제는 별개다 — 영구 디스크가 필요하면 README 참고.
- * ⚠️ 실제 결제(돈 받기)는 아직 없다. '충전'은 테스트용으로 크레딧만 올려준다.
- *    나중에 이 자리에 토스페이먼츠 등 결제대행사(PG)를 연결한다. (아래 /api/topup 참고)
+ * 크레딧 단품 충전은 없다 — SUBSCRIPTION_PLANS(월 구독)로만 크레딧을 받는다.
  */
 const SESSION_SECRET = process.env.SESSION_SECRET || "virtual-office-dev-secret-change-me";
-const SIGNUP_BONUS = 300;   // 가입 시 무료로 주는 크레딧
-const TEST_TOPUP = 300;     // 테스트 충전 1회당 올려주는 크레딧
+const SIGNUP_BONUS = 300;   // 가입 시 무료로 주는 체험 크레딧 (구독 없이도 한 번 써볼 수 있게)
 const COST_PER_AGENT = 10;  // 담당자 1명당 차감 크레딧
 const COST_MANAGER = 20;    // 총괄AI 검수 차감 크레딧
 const COST_CARDNEWS = 30;   // 카드뉴스 1건 생성 시 차감 크레딧
@@ -226,24 +224,37 @@ const COST_CARDNEWS = 30;   // 카드뉴스 1건 생성 시 차감 크레딧
 // "준비 중" 안내로 대체되어, 실서비스처럼 보이되 잘못된 키로 결제 시도가 되는 일은 없다.
 const TOSS_CLIENT_KEY = process.env.TOSS_CLIENT_KEY || "";
 const TOSS_SECRET_KEY = process.env.TOSS_SECRET_KEY || "";
-const CREDIT_PACKAGES = {
-  small: { credits: 500, amount: 5000, label: "500 크레딧" },
-  medium: { credits: 1500, amount: 12000, label: "1,500 크레딧 (20% 더)" },
-  large: { credits: 4000, amount: 28000, label: "4,000 크레딧 (30% 더)" },
-};
 
 // 무통장입금 — PG 심사 없이 지금 바로 쓸 수 있는 결제 수단. 자동이 아니라 대표님이 실제
-// 입금을 확인하고 관리자 페이지에서 승인해야 크레딧이 들어간다(정기결제는 지원 안 함,
-// 1회성 충전 전용). .env에 은행 정보를 넣어야 화면에 노출된다.
+// 입금을 확인하고 관리자 페이지에서 승인해야 크레딧이 들어간다. .env에 은행 정보를 넣어야
+// 화면에 노출된다.
+// 예약 발행은 사용자 요청 없이 서버 타이머로 돌기 때문에 req에서 호스트를 알아낼 수 없다.
+// 카드뉴스 이미지 URL을 인스타그램에 넘기려면 외부에서 접근 가능한 절대주소가 필요하므로
+// .env의 SITE_URL을 쓴다(도메인이 바뀌면 이 값만 바꾸면 된다).
+const PUBLIC_BASE_URL = (() => {
+  const raw = process.env.SITE_URL || "nexta-yhy8.onrender.com";
+  return /^https?:\/\//.test(raw) ? raw.replace(/\/+$/, "") : "https://" + raw.replace(/\/+$/, "");
+})();
+
 const BANK_NAME = process.env.BANK_NAME || "";
 const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || "";
 const BANK_ACCOUNT_HOLDER = process.env.BANK_ACCOUNT_HOLDER || "";
 
-// 정기결제(월 구독) — 이 플랜 하나만 우선 제공한다. 토스페이먼츠 "빌링(자동결제)"는
-// 결제위젯(CREDIT_PACKAGES, 1회성)과 별개 승인/API라 사업자등록증으로 빌링 심사를
-// 통과해야 실제로 청구가 된다. 심사 전까지는 /api/subscription/config가 enabled:false를
-// 내려줘서 화면에 "준비 중"으로만 보인다 — 잘못된 키로 구독 시도가 되는 일은 없다.
-const SUBSCRIPTION_PLAN = { credits: 1500, amount: 12000, label: "넥스타 월 구독 (1,500 크레딧)" };
+/* 정기결제(월 구독) — 유일한 크레딧 획득 경로. 두 요금제 모두 원가(총괄AI 검수에 쓰는
+ * 고급 모델 호출) 대비 순이익률 70% 이상을 남기도록 크레딧량을 계산했다.
+ * 가정: 담당자 호출은 경제형(무료) 모델이라 원가 0원, 총괄AI 검수만 고급 모델(오퍼스급,
+ * 입력 $15/1M·출력 $75/1M 가정)을 쓴다. 평균 업무 1건(담당자 3명+검수, 재작업 확률 포함)의
+ * 검수 원가 ≈ $0.18(약 250원), credits 50 소모 → 크레딧당 원가 ≈ 6원(여유 있게 잡은 값).
+ * 스탠다드 19,900원 → AI 원가 예산 20%(3,980원) ÷ 6원 ≈ 660 → 600크레딧
+ *   (원가 3,600원 18%+ 결제수수료 3.5% + 운영비 5% ≈ 총원가 26.6% → 순이익률 ≈ 73%)
+ * 프로 29,900원 → AI 원가 예산 20%(5,980원) ÷ 6원 ≈ 997 → 1,000크레딧
+ *   (원가 6,000원 20.1% + 결제수수료 3.5% + 운영비 5% ≈ 총원가 28.6% → 순이익률 ≈ 71%)
+ * 실제 사용량은 db.getAiCostStats 등으로 주기적으로 검증해서 필요하면 조정할 것.
+ */
+const SUBSCRIPTION_PLANS = {
+  standard: { key: "standard", label: "스탠다드", amount: 19900, credits: 600 },
+  pro: { key: "pro", label: "프로", amount: 29900, credits: 1000 },
+};
 const SUBSCRIPTION_PERIOD_MS = 30 * 24 * 60 * 60 * 1000; // 30일
 
 function hashPassword(password, salt) {
@@ -473,6 +484,7 @@ function createJob(question, agentKeys, userId, cost, quick) {
     cost: cost || 0,
     quick: !!quick,
     charged: false,
+    cancelled: false,
     events: [],
     listeners: [],
     finished: false,
@@ -865,9 +877,12 @@ async function runPipeline(job) {
       // 1) 고른 담당자들이 서로 대화 없이 동시에 작업
       await Promise.all(agentKeys.map((key) => runSpecialist(key, false)));
 
+      if (job.cancelled) { emit(job, { type: "cancelled", text: "대표님이 업무를 취소했습니다." }); return; }
+
       // 2) 총괄AI 검수 (반려된 담당자만 재작업, 반복)
       let finalReport = "";
       let storageNote = "";
+      let finalVerdicts = {}; // 마지막 검수 판정 — 끝까지 반려된(질문과 안 맞는) 담당자는 크레딧을 안 받는다
       let allCitations = agentKeys.reduce((acc, key) => acc.concat(results[key].citations || []), []);
 
       if (job.quick) {
@@ -892,6 +907,7 @@ async function runPipeline(job) {
         allCitations = agentKeys.reduce((acc, key) => acc.concat(results[key].citations || []), []);
 
         const verdicts = (reviewJson && reviewJson.verdicts) || {};
+        finalVerdicts = verdicts;
         agentKeys.forEach((key) => {
           const v = verdicts[key];
           if (v && typeof v.approved === "boolean") {
@@ -900,6 +916,8 @@ async function runPipeline(job) {
         });
         const rejected = agentKeys.filter((key) => verdicts[key] && verdicts[key].approved === false);
         const canRetry = mAttempt <= MAX_MANAGER_RETRY && rejected.length > 0;
+
+        if (job.cancelled) { emit(job, { type: "cancelled", text: "대표님이 업무를 취소했습니다." }); return; }
 
         if (canRetry) {
           emit(job, { type: "status", agent: "총괄AI", state: "submit", text: "일부 보완 지시" });
@@ -932,6 +950,13 @@ async function runPipeline(job) {
             "- 보완 요청: 부족한 점을 적어 다시 시키실 수 있습니다.\n" +
             "- 이대로 승인: 지금 내용만으로 판단하고 마무리합니다.";
         }
+        // 끝까지 반려된(=이 질문을 처리 못한) 담당자는 크레딧 대상에서 빠진다는 걸 알려준다.
+        const stillRejected = agentKeys.filter((key) => finalVerdicts[key] && finalVerdicts[key].approved === false);
+        if (stillRejected.length) {
+          finalReport += "\n\n## 참고\n" +
+            stillRejected.map((key) => SPECIALISTS[key].label).join(", ") +
+            "은(는) 이 질문을 제대로 처리하지 못해 해당 담당자의 크레딧은 차감하지 않았습니다.";
+        }
         if (storageNote) finalReport += "\n\n## 저장 추천\n" + storageNote;
 
         emit(job, {
@@ -944,13 +969,18 @@ async function runPipeline(job) {
       }
 
       // 보고서가 실제로 나온 시점에 딱 한 번만 크레딧을 차감한다 (도중에 오류가 나면 차감 안 함).
+      // 빠른 모드가 아니면, 총괄AI가 끝까지 반려한(질문과 안 맞아 처리 못한) 담당자는 빼고 차감한다.
       if (!job.charged && job.userId) {
-        const remaining = chargeUser(job.userId, job.cost, {
-          agents: agentKeys.length,
+        const chargeableAgents = job.quick
+          ? agentKeys.length
+          : agentKeys.filter((key) => !(finalVerdicts[key] && finalVerdicts[key].approved === false)).length;
+        const actualCost = chargeableAgents * COST_PER_AGENT + (job.quick ? 0 : COST_MANAGER);
+        const remaining = chargeUser(job.userId, actualCost, {
+          agents: chargeableAgents,
           question: String(question).slice(0, 60),
         });
         job.charged = true;
-        if (remaining !== null) emit(job, { type: "credit", credits: remaining, cost: job.cost });
+        if (remaining !== null) emit(job, { type: "credit", credits: remaining, cost: actualCost });
       }
 
       // 3) 대표(사용자) 최종 승인
@@ -1228,35 +1258,17 @@ app.get("/api/me", (req, res) => {
   res.json({ user: publicUser(u), costPerAgent: COST_PER_AGENT, costManager: COST_MANAGER });
 });
 
-// 테스트 충전. ⚠️ 실제 결제 아님 — 나중에 이 안에서 결제대행사(PG) 결제 성공을 확인한 뒤 크레딧을 올리도록 바꾼다.
-app.post("/api/topup", (req, res) => {
-  const u = currentUser(req);
-  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
-  const credits = (u.credits || 0) + TEST_TOPUP;
-  db.updateCredits(u.id, credits, credits); // 게이지 기준선을 새로 채운 만큼으로 초기화
-  res.json({ ok: true, user: publicUser(db.getUserById(u.id)) });
-});
-
-/* ══════════════════════════════════════════════════════════════
-   실제 결제 (토스페이먼츠 결제위젯)
-   .env에 TOSS_CLIENT_KEY / TOSS_SECRET_KEY가 없으면 "준비 중"으로 안내하고,
-   있으면 실제 결제창이 뜬다. 라이브 키로만 교체하면 그대로 실서비스에 쓸 수 있다.
-   ══════════════════════════════════════════════════════════════ */
-
-// 결제 설정 + 상품 목록 (클라이언트 키는 공개해도 되는 키라 그대로 내려줌)
-app.get("/api/payment/config", (req, res) => {
-  res.json({ enabled: !!(TOSS_CLIENT_KEY && TOSS_SECRET_KEY), clientKey: TOSS_CLIENT_KEY, packages: CREDIT_PACKAGES });
-});
-
 /* ══════════════════════════════════════════════════════════════
    무통장입금 — 사업자 심사 없이 지금 바로 켤 수 있는 결제 수단.
-   신청 → 대표님이 실제 입금을 눈으로 확인 → /admin.html 또는 curl로 승인 → 그때 크레딧 지급.
+   크레딧 단품 충전이 아니라 월 구독(SUBSCRIPTION_PLANS) 결제 수단 중 하나다 — 자동 재청구는
+   안 되니, 신청 → 대표님이 실제 입금을 눈으로 확인 → /admin.html에서 승인 → 그때 크레딧 지급 +
+   30일 이용 기간 부여. 다음 달에는 사용자가 다시 신청해야 한다(정기결제는 위 토스 빌링 참고).
    ══════════════════════════════════════════════════════════════ */
 app.get("/api/payment/bank-transfer/config", (req, res) => {
   res.json({
     enabled: !!BANK_ACCOUNT_NUMBER,
     bank: BANK_NAME, accountNumber: BANK_ACCOUNT_NUMBER, accountHolder: BANK_ACCOUNT_HOLDER,
-    packages: CREDIT_PACKAGES,
+    plans: SUBSCRIPTION_PLANS,
   });
 });
 app.post("/api/payment/bank-transfer/request", (req, res) => {
@@ -1264,81 +1276,27 @@ app.post("/api/payment/bank-transfer/request", (req, res) => {
   if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
   if (!BANK_ACCOUNT_NUMBER) return res.status(400).json({ error: "무통장입금이 아직 준비되지 않았습니다." });
 
-  const pkgKey = String((req.body && req.body.package) || "");
-  const pkg = CREDIT_PACKAGES[pkgKey];
-  if (!pkg) return res.status(400).json({ error: "존재하지 않는 상품입니다." });
+  const planKey = String((req.body && req.body.plan) || "");
+  const plan = SUBSCRIPTION_PLANS[planKey];
+  if (!plan) return res.status(400).json({ error: "존재하지 않는 요금제입니다." });
   const depositorName = String((req.body && req.body.depositorName) || "").trim().slice(0, 40);
   if (!depositorName) return res.status(400).json({ error: "입금하실 분 성함을 입력해 주세요." });
 
   const orderId = "bank_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   db.createOrder(orderId, {
-    userId: u.id, credits: pkg.credits, amount: pkg.amount, label: pkg.label,
+    userId: u.id, credits: plan.credits, amount: plan.amount, label: plan.label,
     status: "pending", createdAt: nowKR(), method: "bank_transfer", depositorName,
   });
   res.json({
     ok: true, orderId,
     bank: BANK_NAME, accountNumber: BANK_ACCOUNT_NUMBER, accountHolder: BANK_ACCOUNT_HOLDER,
-    amount: pkg.amount, credits: pkg.credits,
+    amount: plan.amount, credits: plan.credits,
   });
 });
 
-// 결제 시작 전, 서버가 먼저 "얼마짜리를 사려는지"를 저장해둔다 (결제창에서 금액을 조작해도 나중에 대조해서 막기 위함)
-app.post("/api/payment/create-order", (req, res) => {
-  const u = currentUser(req);
-  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
-  if (!(TOSS_CLIENT_KEY && TOSS_SECRET_KEY)) return res.status(400).json({ error: "결제 기능이 아직 준비 중입니다." });
-
-  const pkgKey = String((req.body && req.body.package) || "");
-  const pkg = CREDIT_PACKAGES[pkgKey];
-  if (!pkg) return res.status(400).json({ error: "존재하지 않는 상품입니다." });
-
-  const orderId = "nexta_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  db.createOrder(orderId, { userId: u.id, credits: pkg.credits, amount: pkg.amount, label: pkg.label, status: "pending", createdAt: nowKR() });
-
-  res.json({ ok: true, orderId, amount: pkg.amount, orderName: pkg.label, clientKey: TOSS_CLIENT_KEY });
-});
-
-// 결제 성공 콜백 — 토스가 돌려준 paymentKey로 "진짜 결제됐는지" 서버 대 서버로 다시 확인(승인)한 뒤에만 크레딧을 준다
-app.get("/payment/success", async (req, res) => {
-  const { paymentKey, orderId, amount } = req.query;
-  const order = db.getOrder(orderId);
-
-  if (!order || order.status !== "pending" || String(order.amount) !== String(amount)) {
-    return res.status(400).send("<h1>결제 확인 실패</h1><p>주문 정보가 일치하지 않습니다.</p><a href='/'>돌아가기</a>");
-  }
-
-  try {
-    const resp = await fetch("https://api.tosspayments.com/v1/payments/confirm", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Basic " + Buffer.from(TOSS_SECRET_KEY + ":").toString("base64"),
-      },
-      body: JSON.stringify({ paymentKey, orderId, amount: Number(amount) }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.message || "결제 승인 실패");
-
-    db.markOrderPaid(orderId);
-
-    const rec = db.getUserById(order.user_id);
-    if (rec) {
-      const credits = (rec.credits || 0) + order.credits;
-      db.updateCredits(rec.id, credits, credits);
-    }
-    res.redirect("/?payment=success");
-  } catch (e) {
-    res.status(500).send("<h1>결제 승인 중 오류</h1><p>" + e.message + "</p><a href='/'>돌아가기</a>");
-  }
-});
-
-app.get("/payment/fail", (req, res) => {
-  res.redirect("/?payment=fail");
-});
-
 /* ══════════════════════════════════════════════════════════════
-   정기결제(구독) — 토스페이먼츠 빌링(자동결제) API
-   결제위젯(위 CREDIT_PACKAGES)과는 별개 승인이 필요하다. TOSS_CLIENT_KEY/TOSS_SECRET_KEY가
+   정기결제(구독) — 토스페이먼츠 빌링(자동결제) API. SUBSCRIPTION_PLANS(스탠다드/프로) 중
+   하나를 고르면 그 플랜의 금액으로 매달 자동 청구된다. TOSS_CLIENT_KEY/TOSS_SECRET_KEY가
    없으면 "준비 중"으로 안내되어 잘못된 키로 구독이 시도되는 일은 없다. 사업자등록증으로
    빌링 심사를 통과해서 실제 키를 .env에 넣으면 그대로 작동한다.
    흐름: ① 프런트가 tossPayments.requestBillingAuth()로 카드 등록 → 토스가 브라우저를
@@ -1363,7 +1321,7 @@ async function chargeTossBilling(billingKey, { customerKey, amount, orderId, ord
 }
 
 app.get("/api/subscription/config", (req, res) => {
-  res.json({ enabled: !!(TOSS_CLIENT_KEY && TOSS_SECRET_KEY), clientKey: TOSS_CLIENT_KEY, plan: SUBSCRIPTION_PLAN });
+  res.json({ enabled: !!(TOSS_CLIENT_KEY && TOSS_SECRET_KEY), clientKey: TOSS_CLIENT_KEY, plans: SUBSCRIPTION_PLANS });
 });
 
 app.get("/api/subscription/status", (req, res) => {
@@ -1374,21 +1332,24 @@ app.get("/api/subscription/status", (req, res) => {
   res.json({
     subscribed: true,
     status: sub.status,
+    plan: sub.plan,
     currentPeriodEnd: sub.currentPeriodEnd,
     canceledAt: sub.canceledAt,
     lastFailureReason: sub.status === "past_due" ? sub.lastFailureReason : null,
   });
 });
 
-// 카드 등록(빌링키 발급) 완료 후 토스가 브라우저를 이 주소로 돌려보낸다 (authKey, customerKey 쿼리).
+// 카드 등록(빌링키 발급) 완료 후 토스가 브라우저를 이 주소로 돌려보낸다 (authKey, customerKey, plan 쿼리).
 // customerKey는 프런트가 requestBillingAuth()에 넘긴 값을 토스가 그대로 돌려준 것일 뿐이라
 // (지금은 me.email을 쓴다 — 내부 사용자 id는 클라이언트에 노출하지 않으므로) 우리 쪽 사용자
-// 식별은 이 값이 아니라 항상 로그인 세션(currentUser)으로만 한다.
+// 식별은 이 값이 아니라 항상 로그인 세션(currentUser)으로만 한다. plan도 프런트가 successUrl에
+// 실어 보낸 값이라 서버는 SUBSCRIPTION_PLANS에 실제로 존재하는 키인지만 검증한다.
 app.get("/api/subscription/billing-success", async (req, res) => {
   const u = currentUser(req);
   if (!u) return res.redirect("/?subscription=fail");
   const { authKey, customerKey } = req.query;
-  if (!authKey || !customerKey || !(TOSS_CLIENT_KEY && TOSS_SECRET_KEY)) {
+  const plan = SUBSCRIPTION_PLANS[String(req.query.plan || "")];
+  if (!authKey || !customerKey || !plan || !(TOSS_CLIENT_KEY && TOSS_SECRET_KEY)) {
     return res.redirect("/?subscription=fail");
   }
 
@@ -1407,7 +1368,7 @@ app.get("/api/subscription/billing-success", async (req, res) => {
 
     const orderId = "sub_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     await chargeTossBilling(billingKey, {
-      customerKey, amount: SUBSCRIPTION_PLAN.amount, orderId, orderName: SUBSCRIPTION_PLAN.label,
+      customerKey, amount: plan.amount, orderId, orderName: "넥스타 " + plan.label + " 구독",
     });
 
     const now = new Date();
@@ -1416,6 +1377,7 @@ app.get("/api/subscription/billing-success", async (req, res) => {
       billingKeyEnc: encryptSecret(billingKey), // 빌링키도 카드 자체나 다름없어 평문 저장 금지
       customerKey, // 재청구할 때도 발급 당시와 같은 값을 써야 하므로 같이 저장해둔다
       status: "active",
+      plan: plan.key,
       currentPeriodEnd: periodEnd,
       canceledAt: null,
       lastPaymentAt: now.toISOString(),
@@ -1423,7 +1385,7 @@ app.get("/api/subscription/billing-success", async (req, res) => {
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     });
-    const credits = (u.credits || 0) + SUBSCRIPTION_PLAN.credits;
+    const credits = (u.credits || 0) + plan.credits;
     db.updateCredits(u.id, credits, credits);
     db.setAccessUntil(u.id, periodEnd);
 
@@ -1451,10 +1413,11 @@ app.post("/api/subscription/cancel", (req, res) => {
 // 직접 "이번 기간이 끝난 활성 구독"을 찾아서 그 빌링키로 청구를 건다.
 async function chargeRenewal(sub) {
   try {
+    const plan = SUBSCRIPTION_PLANS[sub.plan] || SUBSCRIPTION_PLANS.standard;
     const billingKey = decryptSecret(sub.billingKeyEnc);
     const orderId = "subrenew_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     await chargeTossBilling(billingKey, {
-      customerKey: sub.customerKey, amount: SUBSCRIPTION_PLAN.amount, orderId, orderName: SUBSCRIPTION_PLAN.label,
+      customerKey: sub.customerKey, amount: plan.amount, orderId, orderName: "넥스타 " + plan.label + " 구독",
     });
 
     const newPeriodEnd = new Date(new Date(sub.currentPeriodEnd).getTime() + SUBSCRIPTION_PERIOD_MS).toISOString();
@@ -1464,7 +1427,7 @@ async function chargeRenewal(sub) {
     });
     const user = db.getUserById(sub.userId);
     if (user) {
-      const credits = (user.credits || 0) + SUBSCRIPTION_PLAN.credits;
+      const credits = (user.credits || 0) + plan.credits;
       db.updateCredits(sub.userId, credits, credits);
       db.setAccessUntil(sub.userId, newPeriodEnd);
     }
@@ -1544,7 +1507,7 @@ app.post("/api/social/cardnews", async (req, res) => {
   if (!p.name || !p.hook) return res.status(400).json({ error: "name, hook은 필수입니다." });
 
   if ((u.credits || 0) < COST_CARDNEWS) {
-    return res.status(402).json({ error: "크레딧이 부족합니다. 충전 후 다시 시도해 주세요." });
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다." });
   }
 
   try {
@@ -1626,7 +1589,7 @@ app.post("/api/social/coupang-auto", (req, res) => {
 
   const cost = COST_CARDNEWS * quantity;
   if ((user.credits || 0) < cost) {
-    return res.status(402).json({ error: "크레딧이 부족합니다. 충전 후 다시 시도해 주세요.", need: cost, have: user.credits || 0 });
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다.", need: cost, have: user.credits || 0 });
   }
 
   const job = createSimpleJob(user.id, cost);
@@ -1636,6 +1599,137 @@ app.post("/api/social/coupang-auto", (req, res) => {
   const baseUrl = `${req.protocol}://${req.get("host")}`;
   runCoupangAutoJob(job, { category, productName, price, imageUrl, quantity, commentKeyword, baseUrl, social, promoOptout: !!user.promoOptout });
 });
+
+/* ══════════════════════════════════════════════════════════════
+   3-2) 자동 발행 — 보관함 + 예약
+   쿠팡은 서버에서 상품을 긁어올 수 없어(차단됨) 북마클릿으로만 가져온다. 그래서
+   "한가할 때 상품을 보관함에 담아두면, 예약 시각마다 하나씩 꺼내 알아서 발행"하는 구조다.
+   대표가 자는 동안에도 계정이 계속 돌아가게 만드는 것이 이 기능의 목적이다.
+   ══════════════════════════════════════════════════════════════ */
+const AUTO_QUEUE_MAX = 60; // 보관함 상한 — 무한정 쌓아 크레딧이 예고 없이 소진되는 것을 막는다
+
+// KST 기준 날짜/시각 (서버 타임존과 무관하게 한국 시간으로 예약을 판단한다)
+function kstNow() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t)?.value || "";
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, hour: parseInt(get("hour"), 10) || 0 };
+}
+
+app.get("/api/social/queue", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  res.json({ items: db.listQueue(u.id, 50), pending: db.countPendingQueue(u.id), max: AUTO_QUEUE_MAX });
+});
+
+app.post("/api/social/queue", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const b = req.body || {};
+  const name = String(b.name || "").trim().slice(0, 200);
+  const category = String(b.category || "").trim().slice(0, 40);
+  if (!name) return res.status(400).json({ error: "상품명이 필요합니다. 북마클릿으로 다시 가져와 주세요." });
+  if (!category) return res.status(400).json({ error: "카테고리를 선택해 주세요." });
+  if (db.countPendingQueue(u.id) >= AUTO_QUEUE_MAX) {
+    return res.status(400).json({ error: `보관함이 가득 찼습니다(최대 ${AUTO_QUEUE_MAX}개). 발행되면 자리가 생겨요.` });
+  }
+
+  db.addQueueItem(u.id, {
+    id: "q_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+    name, category,
+    price: String(b.price || "").trim().slice(0, 40),
+    imageUrl: String(b.imageUrl || "").trim().slice(0, 1000),
+    createdAt: new Date().toISOString(),
+  });
+  res.json({ ok: true, pending: db.countPendingQueue(u.id) });
+});
+
+app.delete("/api/social/queue/:id", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  db.deleteQueueItem(u.id, req.params.id);
+  res.json({ ok: true, pending: db.countPendingQueue(u.id) });
+});
+
+app.get("/api/social/schedule", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  res.json({
+    schedule: db.getSchedule(u.id) || { enabled: false, hour: 8, quantity: 2, commentKeyword: "정보" },
+    pending: db.countPendingQueue(u.id),
+    instagramConnected: !!(u.social && u.social.instagram),
+  });
+});
+
+app.post("/api/social/schedule", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const b = req.body || {};
+  const enabled = !!b.enabled;
+  if (enabled && !(u.social && u.social.instagram)) {
+    return res.status(400).json({ error: "먼저 인스타그램 계정을 연결해 주세요." });
+  }
+  db.upsertSchedule(u.id, {
+    enabled,
+    hour: Math.max(0, Math.min(23, parseInt(b.hour, 10) || 8)),
+    quantity: Math.min(COUPANG_AUTO_MAX_QTY, Math.max(1, parseInt(b.quantity, 10) || 2)),
+    commentKeyword: String(b.commentKeyword || "정보").trim().slice(0, 20) || "정보",
+  });
+  res.json({ ok: true, schedule: db.getSchedule(u.id) });
+});
+
+/* 예약 실행기 — 10분마다 "오늘 아직 안 돈, 시각이 된" 예약을 찾아 보관함에서 1건씩 발행한다.
+   실패해도(크레딧 부족, 보관함 비어 있음 등) 사유만 남기고 그날은 넘어간다 — 재시도로
+   크레딧이 예고 없이 빠져나가지 않게 하기 위함이다. */
+const AUTO_SCHEDULE_CHECK_MS = 10 * 60 * 1000;
+async function runScheduledPost(schedule) {
+  const { date } = kstNow();
+  const user = db.getUserById(schedule.userId);
+  if (!user) return;
+
+  const finish = (msg) => db.markScheduleRun(schedule.userId, date, msg);
+
+  const social = user.social && user.social.instagram;
+  if (!social) return finish("인스타그램 연결이 해제되어 건너뜀");
+  if (!hasValidAccess(user)) return finish("이용 기간이 끝나 건너뜀");
+
+  const item = db.nextPendingQueueItem(schedule.userId);
+  if (!item) return finish("보관함이 비어 있어 건너뜀");
+
+  const cost = COST_CARDNEWS * schedule.quantity;
+  if ((user.credits || 0) < cost) return finish("크레딧이 부족해 건너뜀");
+
+  // 하루 1회 보장을 위해 실행 "시작" 시점에 오늘 날짜를 먼저 찍는다.
+  // (발행이 오래 걸려도 다음 10분 주기에서 중복 실행되지 않게)
+  finish("발행 중…");
+
+  const job = createSimpleJob(user.id, cost);
+  safeCreateJobLog(job.id, user.id, "auto_scheduled", item.name + " (" + item.category + ")", [], new Date().toISOString());
+
+  try {
+    await runCoupangAutoJob(job, {
+      category: item.category, productName: item.name, price: item.price, imageUrl: item.imageUrl,
+      quantity: schedule.quantity, commentKeyword: schedule.commentKeyword,
+      baseUrl: PUBLIC_BASE_URL, social, promoOptout: !!user.promoOptout,
+    });
+    db.markQueueItem(item.id, "done", null, new Date().toISOString());
+    db.markScheduleRun(schedule.userId, date, `발행 완료 — ${item.name}`);
+  } catch (e) {
+    db.markQueueItem(item.id, "failed", String(e.message || e).slice(0, 300), null);
+    db.markScheduleRun(schedule.userId, date, "발행 실패 — " + String(e.message || e).slice(0, 120));
+    console.error("[예약 발행 실패]", schedule.userId, e.message);
+  }
+}
+setInterval(() => {
+  const { date, hour } = kstNow();
+  let due = [];
+  try { due = db.getDueSchedules(date, hour); }
+  catch (e) { console.warn("[예약 조회 실패 — 무시]", e.message); return; }
+  // 한 주기에 여러 사용자가 걸려도 순차 실행한다 (동시에 여러 건이 돌면 API 한도에 걸린다)
+  due.reduce((chain, s) => chain.then(() => runScheduledPost(s).catch(() => {})), Promise.resolve());
+}, AUTO_SCHEDULE_CHECK_MS);
 
 // 4) 메타 웹훅 — 댓글에 키워드 남기면 자동으로 비공개 답장(DM) 발송 (매니챗 대체, 무료·무제한)
 const IG_WEBHOOK_VERIFY_TOKEN = process.env.IG_WEBHOOK_VERIFY_TOKEN || "nexta-verify";
@@ -1700,7 +1794,7 @@ app.post("/api/start", (req, res) => {
   // 빠른 모드는 총괄AI 검수를 건너뛰므로 검수 크레딧(20)을 받지 않는다.
   const cost = agentKeys.length * COST_PER_AGENT + (quick ? 0 : COST_MANAGER);
   if ((user.credits || 0) < cost) {
-    return res.status(402).json({ error: "크레딧이 부족합니다. 충전 후 다시 시도해 주세요.", need: cost, have: user.credits || 0 });
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다.", need: cost, have: user.credits || 0 });
   }
 
   const job = createJob(question, agentKeys, user.id, cost, quick);
@@ -1737,6 +1831,22 @@ app.get("/api/stream/:jobId", (req, res) => {
     clearInterval(keepAlive);
     job.listeners = job.listeners.filter((r) => r !== res);
   });
+});
+
+// 업무 중간 취소 — 총괄AI 검수가 끝나 크레딧이 차감되기 전(작업 중/검수 중)에만 취소할 수 있다.
+// 이미 대표님 승인 대기 단계(await-approval)까지 갔다면 이미 차감이 끝난 뒤라 취소가 아니라
+// 그 화면에서 승인/보완요청으로 마무리해야 한다.
+app.post("/api/cancel/:jobId", (req, res) => {
+  const user = currentUser(req);
+  if (!user) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "업무를 찾을 수 없습니다." });
+  if (job.userId !== user.id) return res.status(403).json({ error: "권한이 없습니다." });
+  if (job.finished || job.charged) {
+    return res.status(409).json({ error: "이미 진행이 많이 되어 취소할 수 없습니다." });
+  }
+  job.cancelled = true;
+  res.json({ ok: true });
 });
 
 // 결과물에 대한 대표님의 만족도(👍/👎) — 품질 저하를 조기에 감지하려는 용도
@@ -1875,6 +1985,9 @@ app.post("/api/admin/bank-orders/:orderId/confirm", requireAdminKey, (req, res) 
   if (rec) {
     const credits = (rec.credits || 0) + order.credits;
     db.updateCredits(rec.id, credits, credits);
+    // 무통장입금도 구독 결제 수단 중 하나라 승인 시 30일 이용 기간을 함께 부여한다.
+    // (자동 재청구는 안 되므로 다음 달엔 사용자가 다시 신청해야 한다.)
+    db.setAccessUntil(rec.id, new Date(Date.now() + SUBSCRIPTION_PERIOD_MS).toISOString());
   }
   res.json({ ok: true, orders: db.listPendingBankTransferOrders() });
 });
