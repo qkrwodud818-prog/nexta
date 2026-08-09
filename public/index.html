@@ -569,6 +569,55 @@
   </div>
 </div>
 
+<!-- ══════ SCREEN 6 — 수익 현황 ══════ -->
+<div id="screen6" class="screen app-layout">
+  <aside class="sidebar" data-sb="revenue"></aside>
+  <div class="main-content">
+    <div class="brain-header">
+      <div class="brain-title">수익 현황 💰</div>
+      <button class="btn-sm" onclick="goTo('screen2')">← 홈</button>
+    </div>
+    <p style="font-size:13px;color:var(--soft);margin-bottom:20px;">비비들이 실제로 벌어준 금액이에요. 쿠팡 파트너스는 자동으로 집계되고, 다른 채널은 직접 입력하시면 함께 합산됩니다.</p>
+
+    <div class="stat-cards" style="grid-template-columns:repeat(3,1fr);">
+      <div class="c"><div class="v" id="revThisMonth">0원</div><div class="l">이번 달</div></div>
+      <div class="c"><div class="v" id="revLastMonth">0원</div><div class="l">지난 달</div></div>
+      <div class="c"><div class="v" id="revAllTime">0원</div><div class="l">누적</div></div>
+    </div>
+
+    <div class="section-header"><div class="section-title">최근 30일 추이</div></div>
+    <div id="revTrend" style="display:flex;align-items:flex-end;gap:3px;height:120px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:22px;"></div>
+
+    <div class="section-header"><div class="section-title">이번 달 채널별</div></div>
+    <div id="revByChannel" style="margin-bottom:22px;"></div>
+
+    <!-- 쿠팡 파트너스 연동 -->
+    <div class="cn-card" style="margin-bottom:22px;">
+      <div class="cn-step">🔗 쿠팡 파트너스 자동 집계</div>
+      <div id="revCoupangBox" style="margin-top:10px;"></div>
+    </div>
+
+    <!-- 직접 입력 -->
+    <div class="cn-card" style="margin-bottom:22px;">
+      <div class="cn-step">✏️ 직접 입력</div>
+      <p style="font-size:12.5px;color:var(--soft);margin:6px 0 10px;">애드센스·틱톡처럼 자동 집계가 안 되는 채널은 여기에 적어 주세요.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input type="date" id="revDate" style="padding:9px;border-radius:8px;border:1px solid var(--line);">
+        <select id="revChannel" style="padding:9px;border-radius:8px;border:1px solid var(--line);"></select>
+        <input type="number" id="revAmount" min="0" placeholder="금액(원)" style="width:130px;padding:9px;border-radius:8px;border:1px solid var(--line);">
+        <button class="btn-sm pri" id="revAddBtn">추가</button>
+      </div>
+      <div id="revAddMsg" style="font-size:12.5px;margin-top:8px;"></div>
+    </div>
+
+    <div class="section-header"><div class="section-title">최근 기록</div></div>
+    <table class="dash-table">
+      <thead><tr><th>날짜</th><th>채널</th><th>금액</th><th>수집</th><th></th></tr></thead>
+      <tbody id="revRecent"><tr><td colspan="5" style="color:var(--soft);text-align:center;">아직 기록이 없어요.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ══════ SCREEN 5 — 카드뉴스 자동생성 ══════ -->
 <div id="screen5" class="screen app-layout">
   <aside class="sidebar" data-sb="cardnews"></aside>
@@ -832,6 +881,7 @@ function goTo(id){
   if(id === 'screen4') renderDashboard();
   if(id === 'screen3') loadKnowledgeList();
   if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); }
+  if(id === 'screen6') loadRevenue();
 }
 function enterApp(){
   if(me){ goTo('screen2'); } else { document.getElementById('authOverlay').classList.add('show'); }
@@ -846,7 +896,8 @@ var SB_ICONS = {
   chat:'<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>',
   cardnews:'<path d="M4 4h16v14H7l-3 3V4z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="9.5" r="1.6"/><path d="M8 15l3-3 2.5 2.5L17 10l3 3v3H8z"/>',
   gear:'<path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>',
-  back:'<path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>'
+  back:'<path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>',
+  money:'<path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/>'
 };
 function ic(name,size){ return '<svg width="'+(size||20)+'" height="'+(size||20)+'" viewBox="0 0 24 24" fill="currentColor">'+SB_ICONS[name]+'</svg>'; }
 function buildSidebars(){
@@ -861,6 +912,7 @@ function buildSidebars(){
       +   '<div class="sb-icon' + (cur==='stats'?' active':'') + '" data-go="screen4" title="업무 현황">' + ic('list') + '</div>'
       +   '<div class="sb-icon' + (cur==='brain'?' active':'') + '" data-go="screen3" title="브레인 AI">' + ic('brain') + '</div>'
       +   '<div class="sb-icon' + (cur==='cardnews'?' active':'') + '" data-go="screen5" title="카드뉴스 자동생성">' + ic('cardnews') + '<span class="sb-badge on" style="background:var(--green);">N</span></div>'
+      +   '<div class="sb-icon' + (cur==='revenue'?' active':'') + '" data-go="screen6" title="수익 현황">' + ic('money') + '</div>'
       +   '<div class="sb-icon" data-act="feed" title="진행 과정">' + ic('chat') + '<span class="sb-badge"></span></div>'
       + '</div>'
       + '<div class="sidebar-bottom">'
@@ -1650,6 +1702,117 @@ document.getElementById('cnPromoToggle').addEventListener('change', function(){
   .then(function(r){ return r.json(); })
   .then(function(d){ if(d.user){ me = d.user; } });
 });
+/* ══════ 수익 현황 ══════ */
+var revChannels = {};
+function won(n){ return Number(n||0).toLocaleString() + '원'; }
+
+function loadRevenue(){
+  fetch('/api/revenue/summary').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+    if(!d) return;
+    revChannels = d.channels || {};
+
+    document.getElementById('revThisMonth').textContent = won(d.thisMonth);
+    document.getElementById('revLastMonth').textContent = won(d.lastMonth);
+    document.getElementById('revAllTime').textContent = won(d.allTime);
+
+    // 추이 막대 — 최대값 기준으로 높이를 잡고, 0원인 날도 얇게 남겨 날짜 흐름이 보이게 한다
+    var max = Math.max.apply(null, d.trend.map(function(t){ return t.amount; }).concat([1]));
+    document.getElementById('revTrend').innerHTML = d.trend.map(function(t){
+      var h = Math.max(2, Math.round(t.amount / max * 92));
+      return '<div title="'+t.date+' · '+won(t.amount)+'" style="flex:1;height:'+h+'px;border-radius:3px 3px 0 0;'
+        + 'background:'+(t.amount>0?'var(--purple)':'var(--line)')+';"></div>';
+    }).join('');
+
+    var ch = Object.keys(d.byChannel);
+    document.getElementById('revByChannel').innerHTML = ch.length
+      ? ch.sort(function(a,b){ return d.byChannel[b]-d.byChannel[a]; }).map(function(k){
+          var pct = Math.round(d.byChannel[k] / Math.max(1, d.thisMonth) * 100);
+          return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;">'
+            + '<div style="width:110px;font-size:13px;font-weight:600;">'+esc(revChannels[k]||k)+'</div>'
+            + '<div style="flex:1;height:8px;background:var(--bg);border-radius:4px;overflow:hidden;">'
+            +   '<div style="width:'+pct+'%;height:100%;background:var(--purple);"></div></div>'
+            + '<div style="width:96px;text-align:right;font-size:13px;font-weight:700;">'+won(d.byChannel[k])+'</div></div>';
+        }).join('')
+      : '<div style="font-size:12.5px;color:var(--soft);">이번 달 기록이 아직 없어요.</div>';
+
+    // 쿠팡 연동 상태
+    var box = document.getElementById('revCoupangBox');
+    if(d.coupang.connected){
+      box.innerHTML = '<div style="font-size:13px;color:var(--green);font-weight:600;margin-bottom:8px;">✅ 연결됨 — 6시간마다 자동으로 실적을 가져옵니다.</div>'
+        + (d.coupang.lastSyncedAt ? '<div style="font-size:12px;color:var(--soft);margin-bottom:10px;">마지막 수집: '+esc(new Date(d.coupang.lastSyncedAt).toLocaleString('ko-KR'))+'</div>' : '')
+        + (d.coupang.lastError ? '<div class="err" style="margin-bottom:10px;">최근 오류: '+esc(d.coupang.lastError)+'</div>' : '')
+        + '<button class="btn-sm pri" id="revSyncBtn">지금 가져오기</button> '
+        + '<button class="btn-sm" id="revDisconnectBtn">연결 해제</button>';
+      document.getElementById('revSyncBtn').onclick = function(){
+        var b=this; b.disabled=true; b.textContent='가져오는 중...';
+        fetch('/api/revenue/coupang/sync',{method:'POST'})
+          .then(function(r){ return r.json().then(function(x){ return {ok:r.ok,d:x}; }); })
+          .then(function(res){ if(!res.ok) alert(res.d.error||'가져오지 못했습니다.'); loadRevenue(); });
+      };
+      document.getElementById('revDisconnectBtn').onclick = function(){
+        if(!confirm('쿠팡 파트너스 연결을 해제할까요? 이미 수집된 기록은 남습니다.')) return;
+        fetch('/api/revenue/coupang/disconnect',{method:'POST'}).then(function(){ loadRevenue(); });
+      };
+    } else {
+      box.innerHTML = '<p style="font-size:12.5px;color:var(--soft);margin:0 0 10px;">쿠팡 파트너스에서 발급받은 API 키를 넣으면 수익이 자동으로 집계됩니다. 키는 암호화해서 저장돼요.</p>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+        + '<input id="revAccessKey" placeholder="ACCESS KEY" style="flex:1;min-width:180px;padding:9px;border-radius:8px;border:1px solid var(--line);">'
+        + '<input id="revSecretKey" type="password" placeholder="SECRET KEY" style="flex:1;min-width:180px;padding:9px;border-radius:8px;border:1px solid var(--line);">'
+        + '<button class="btn-sm pri" id="revConnectBtn">연결</button></div>'
+        + '<div id="revConnectMsg" style="font-size:12.5px;margin-top:8px;"></div>';
+      document.getElementById('revConnectBtn').onclick = function(){
+        var b=this, msg=document.getElementById('revConnectMsg');
+        b.disabled=true; msg.innerHTML='확인 중...';
+        fetch('/api/revenue/coupang/connect',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ accessKey:document.getElementById('revAccessKey').value.trim(),
+                                secretKey:document.getElementById('revSecretKey').value.trim() })})
+        .then(function(r){ return r.json().then(function(x){ return {ok:r.ok,d:x}; }); })
+        .then(function(res){
+          if(!res.ok){ msg.innerHTML='<span class="err">'+esc(res.d.error||'연결 실패')+'</span>'; b.disabled=false; return; }
+          celebrate('💰 쿠팡 파트너스가 연결됐어요!'); loadRevenue();
+        });
+      };
+    }
+
+    // 채널 선택지 (자동 집계 중인 쿠팡은 직접 입력에서 뺀다)
+    var sel = document.getElementById('revChannel');
+    sel.innerHTML = Object.keys(revChannels)
+      .filter(function(k){ return !(k==='coupang' && d.coupang.connected); })
+      .map(function(k){ return '<option value="'+k+'">'+esc(revChannels[k])+'</option>'; }).join('');
+
+    var body = document.getElementById('revRecent');
+    body.innerHTML = d.recent.length ? d.recent.map(function(e){
+      return '<tr><td>'+esc(e.date)+'</td><td>'+esc(revChannels[e.channel]||e.channel)+'</td>'
+        + '<td>'+won(e.amount)+'</td><td>'+(e.source==='api'?'자동':'직접')+'</td>'
+        + '<td>'+(e.source==='manual' ? '<button class="btn-sm" data-rdel="'+esc(e.date)+'|'+esc(e.channel)+'" style="padding:3px 8px;font-size:11px;">삭제</button>' : '')+'</td></tr>';
+    }).join('') : '<tr><td colspan="5" style="color:var(--soft);text-align:center;">아직 기록이 없어요.</td></tr>';
+    body.querySelectorAll('[data-rdel]').forEach(function(b){
+      b.onclick = function(){
+        var p = b.getAttribute('data-rdel').split('|');
+        fetch('/api/revenue/entry',{method:'DELETE',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({date:p[0], channel:p[1]})}).then(function(){ loadRevenue(); });
+      };
+    });
+  }).catch(function(){});
+}
+document.getElementById('revAddBtn').onclick = function(){
+  var msg = document.getElementById('revAddMsg');
+  var date = document.getElementById('revDate').value;
+  var amount = document.getElementById('revAmount').value;
+  if(!date || amount === ''){ msg.innerHTML='<span class="err">날짜와 금액을 입력해 주세요.</span>'; return; }
+  var b=this; b.disabled=true;
+  fetch('/api/revenue/entry',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({date:date, channel:document.getElementById('revChannel').value, amount:Number(amount)})})
+  .then(function(r){ return r.json().then(function(x){ return {ok:r.ok,d:x}; }); })
+  .then(function(res){
+    if(!res.ok){ msg.innerHTML='<span class="err">'+esc(res.d.error||'저장 실패')+'</span>'; return; }
+    msg.innerHTML='<span style="color:var(--green);">저장했어요.</span>';
+    document.getElementById('revAmount').value='';
+    loadRevenue();
+  })
+  .finally(function(){ b.disabled=false; });
+};
+
 /* ══════ 자동 발행 — 보관함 + 예약 ══════ */
 (function(){
   var sel = document.getElementById('schHour');

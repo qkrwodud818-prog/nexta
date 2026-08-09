@@ -268,6 +268,41 @@ db.exec(`
   );
 `);
 
+/* ────────────────────────── 수익 기록 ──────────────────────────
+ * 비비들이 실제로 얼마를 벌어줬는지 보여주는 화면의 원천 데이터.
+ * (date, channel) 단위로 하나만 유지한다 — 쿠팡 API를 다시 당겨도 중복되지 않고
+ * 최신 값으로 덮어써진다(취소분이 반영돼 금액이 줄어들 수도 있으므로).
+ * source: 'api'(자동 수집) | 'manual'(사용자 직접 입력)
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS revenue_entries (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,                       -- YYYY-MM-DD (KST)
+    channel TEXT NOT NULL,                    -- coupang | adsense | tiktok | smartstore | etc
+    amount INTEGER NOT NULL DEFAULT 0,        -- 원 단위
+    clicks INTEGER,
+    orders INTEGER,
+    source TEXT NOT NULL DEFAULT 'manual',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, date, channel)
+  );
+  CREATE INDEX IF NOT EXISTS revenue_entries_user_date_idx
+    ON revenue_entries (user_id, date DESC);
+
+  -- 채널별 API 키. 쿠팡 파트너스는 사용자마다 자기 계정 키를 쓰므로 사용자별로 저장하고,
+  -- 인스타 토큰과 같은 방식으로 암호화해 둔다(평문 저장 금지).
+  CREATE TABLE IF NOT EXISTS revenue_keys (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    access_key_enc TEXT,
+    secret_key_enc TEXT,
+    last_synced_at TEXT,
+    last_error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, channel)
+  );
+`);
+
 /* ────────────────────────── users ────────────────────────── */
 
 function hydrateUsage(row) {
@@ -837,7 +872,90 @@ function markScheduleRun(userId, todayKst, result) {
     .run(todayKst, String(result || "").slice(0, 300), new Date().toISOString(), userId);
 }
 
+/* ────────────────────────── 수익 기록 ────────────────────────── */
+
+/** (date, channel) 하나만 유지 — 다시 당겨도 중복 없이 최신 값으로 덮어쓴다. */
+function upsertRevenue(userId, e) {
+  db.prepare(
+    `INSERT INTO revenue_entries (user_id, date, channel, amount, clicks, orders, source, updated_at)
+     VALUES (@userId, @date, @channel, @amount, @clicks, @orders, @source, @updatedAt)
+     ON CONFLICT(user_id, date, channel) DO UPDATE SET
+       amount = excluded.amount, clicks = excluded.clicks, orders = excluded.orders,
+       source = excluded.source, updated_at = excluded.updated_at`
+  ).run({
+    userId, date: e.date, channel: e.channel,
+    amount: Math.round(Number(e.amount) || 0),
+    clicks: e.clicks == null ? null : Math.round(Number(e.clicks) || 0),
+    orders: e.orders == null ? null : Math.round(Number(e.orders) || 0),
+    source: e.source || "manual", updatedAt: new Date().toISOString(),
+  });
+}
+function upsertRevenueMany(userId, entries) {
+  const run = db.transaction((list) => { list.forEach((e) => upsertRevenue(userId, e)); });
+  run(entries);
+}
+function deleteRevenue(userId, date, channel) {
+  db.prepare("DELETE FROM revenue_entries WHERE user_id = ? AND date = ? AND channel = ?")
+    .run(userId, date, channel);
+}
+/** fromDate(포함) 이후 기록. 대시보드의 합계·추이·채널별 집계가 모두 여기서 나온다. */
+function listRevenue(userId, fromDate) {
+  return db
+    .prepare(
+      `SELECT date, channel, amount, clicks, orders, source FROM revenue_entries
+       WHERE user_id = ? AND date >= ? ORDER BY date DESC`
+    )
+    .all(userId, fromDate)
+    .map((r) => ({
+      date: r.date, channel: r.channel, amount: r.amount,
+      clicks: r.clicks, orders: r.orders, source: r.source,
+    }));
+}
+function getRevenueTotal(userId, fromDate, toDate) {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount),0) AS total FROM revenue_entries
+       WHERE user_id = ? AND date >= ? AND date <= ?`
+    )
+    .get(userId, fromDate, toDate);
+  return Number(row?.total || 0);
+}
+
+function getRevenueKey(userId, channel) {
+  const row = db.prepare("SELECT * FROM revenue_keys WHERE user_id = ? AND channel = ?").get(userId, channel);
+  if (!row) return null;
+  return {
+    channel: row.channel, accessKeyEnc: row.access_key_enc, secretKeyEnc: row.secret_key_enc,
+    lastSyncedAt: row.last_synced_at || null, lastError: row.last_error || null,
+  };
+}
+function setRevenueKey(userId, channel, accessKeyEnc, secretKeyEnc) {
+  db.prepare(
+    `INSERT INTO revenue_keys (user_id, channel, access_key_enc, secret_key_enc, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, channel) DO UPDATE SET
+       access_key_enc = excluded.access_key_enc, secret_key_enc = excluded.secret_key_enc,
+       last_error = NULL, updated_at = excluded.updated_at`
+  ).run(userId, channel, accessKeyEnc, secretKeyEnc, new Date().toISOString());
+}
+function deleteRevenueKey(userId, channel) {
+  db.prepare("DELETE FROM revenue_keys WHERE user_id = ? AND channel = ?").run(userId, channel);
+}
+function markRevenueSync(userId, channel, error) {
+  db.prepare("UPDATE revenue_keys SET last_synced_at = ?, last_error = ? WHERE user_id = ? AND channel = ?")
+    .run(new Date().toISOString(), error ? String(error).slice(0, 300) : null, userId, channel);
+}
+/** 자동 수집 스케줄러가 쓴다 — 키가 등록된 모든 사용자. */
+function listRevenueKeyUsers(channel) {
+  return db
+    .prepare("SELECT user_id FROM revenue_keys WHERE channel = ? AND access_key_enc IS NOT NULL")
+    .all(channel)
+    .map((r) => r.user_id);
+}
+
 module.exports = {
+  upsertRevenue, upsertRevenueMany, deleteRevenue, listRevenue, getRevenueTotal,
+  getRevenueKey, setRevenueKey, deleteRevenueKey, markRevenueSync, listRevenueKeyUsers,
   addQueueItem, listQueue, countPendingQueue, nextPendingQueueItem, markQueueItem, deleteQueueItem,
   getSchedule, upsertSchedule, getDueSchedules, markScheduleRun,
   getUserById, getUserByEmail, emailExists, createUser, updateCredits, updateCompany, setPromoOptout, setAccessUntil,

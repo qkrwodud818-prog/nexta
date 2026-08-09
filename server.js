@@ -1731,6 +1731,210 @@ setInterval(() => {
   due.reduce((chain, s) => chain.then(() => runScheduledPost(s).catch(() => {})), Promise.resolve());
 }, AUTO_SCHEDULE_CHECK_MS);
 
+/* ══════════════════════════════════════════════════════════════
+   3-3) 수익 대시보드 — "비비들이 얼마나 벌어줬나"
+   쿠팡 파트너스는 공식 Open API로 자동 수집하고, API가 없는 채널(애드센스·틱톡 등)은
+   직접 입력을 받는다. 파트너스 키는 사용자마다 자기 계정 것을 쓰므로 사용자별로 저장하며,
+   인스타 토큰과 같은 방식으로 암호화해 둔다.
+   ══════════════════════════════════════════════════════════════ */
+const REVENUE_CHANNELS = {
+  coupang: "쿠팡 파트너스",
+  adsense: "애드센스",
+  tiktok: "틱톡",
+  smartstore: "스마트스토어",
+  youtube: "유튜브",
+  etc: "기타",
+};
+
+/** 쿠팡 Open API 서명 — CEA HmacSHA256. 서명 시각은 반드시 UTC(yyMMddTHHmmssZ). */
+function coupangAuthHeader(accessKey, secretKey, method, pathOnly, query) {
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, "0");
+  const datetime =
+    String(d.getUTCFullYear()).slice(-2) + p2(d.getUTCMonth() + 1) + p2(d.getUTCDate()) +
+    "T" + p2(d.getUTCHours()) + p2(d.getUTCMinutes()) + p2(d.getUTCSeconds()) + "Z";
+  const message = datetime + method.toUpperCase() + pathOnly + (query || "");
+  const signature = crypto.createHmac("sha256", secretKey).update(message).digest("hex");
+  return `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${signature}`;
+}
+
+const COUPANG_API_HOST = "https://api-gateway.coupang.com";
+const COUPANG_COMMISSION_PATH = "/v2/providers/affiliate_open_api/apis/openapi/reports/commission";
+
+/** 쿠팡 파트너스 커미션 리포트 조회 (한 번에 최대 30일). yyyyMMdd 형식. */
+async function fetchCoupangCommission(accessKey, secretKey, startDate, endDate) {
+  const query = `startDate=${startDate}&endDate=${endDate}`;
+  const auth = coupangAuthHeader(accessKey, secretKey, "GET", COUPANG_COMMISSION_PATH, query);
+  const resp = await fetch(`${COUPANG_API_HOST}${COUPANG_COMMISSION_PATH}?${query}`, {
+    method: "GET",
+    headers: { Authorization: auth, "Content-Type": "application/json;charset=UTF-8" },
+  });
+  const text = await resp.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error("쿠팡 응답을 해석하지 못했습니다."); }
+  if (!resp.ok) throw new Error(data.message || data.rMessage || `쿠팡 API 오류 (${resp.status})`);
+  return Array.isArray(data.data) ? data.data : [];
+}
+
+/** 리포트를 하루 단위로 합쳐 저장한다 (같은 날짜에 trackingCode별로 여러 행이 온다). */
+async function syncCoupangRevenue(userId) {
+  const key = db.getRevenueKey(userId, "coupang");
+  if (!key || !key.accessKeyEnc || !key.secretKeyEnc) return { ok: false, error: "키가 등록되지 않았습니다." };
+
+  try {
+    const accessKey = decryptSecret(key.accessKeyEnc);
+    const secretKey = decryptSecret(key.secretKeyEnc);
+    const end = new Date();
+    const start = new Date(end.getTime() - 29 * 24 * 60 * 60 * 1000); // API 상한이 30일
+    const ymd = (d) => d.toISOString().slice(0, 10).replace(/-/g, "");
+    const rows = await fetchCoupangCommission(accessKey, secretKey, ymd(start), ymd(end));
+
+    const byDate = new Map();
+    for (const r of rows) {
+      const raw = String(r.date || "");
+      const date = raw.includes("-") ? raw : `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+      const cur = byDate.get(date) || { amount: 0, clicks: 0, orders: 0 };
+      cur.amount += Number(r.commission) || 0;
+      cur.clicks += Number(r.click) || 0;
+      cur.orders += Number(r.order) || 0;
+      byDate.set(date, cur);
+    }
+    db.upsertRevenueMany(
+      userId,
+      [...byDate.entries()].map(([date, v]) => ({
+        date, channel: "coupang", amount: v.amount, clicks: v.clicks, orders: v.orders, source: "api",
+      })),
+    );
+    db.markRevenueSync(userId, "coupang", null);
+    return { ok: true, days: byDate.size };
+  } catch (e) {
+    db.markRevenueSync(userId, "coupang", e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+app.get("/api/revenue/summary", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const { date: today } = kstNow();
+  const d = new Date(today + "T00:00:00Z");
+  const iso = (x) => x.toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 8) + "01";
+  const prevMonthEnd = iso(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 0)));
+  const prevMonthStart = prevMonthEnd.slice(0, 8) + "01";
+  const from = iso(new Date(d.getTime() - 89 * 24 * 60 * 60 * 1000));
+
+  const entries = db.listRevenue(u.id, from);
+  const byChannel = {};
+  const byDate = {};
+  for (const e of entries) {
+    // 상한(today)을 함께 걸어야 채널별 합계와 thisMonth 총액이 어긋나지 않는다.
+    if (e.date >= monthStart && e.date <= today) {
+      byChannel[e.channel] = (byChannel[e.channel] || 0) + e.amount;
+    }
+    byDate[e.date] = (byDate[e.date] || 0) + e.amount;
+  }
+
+  const key = db.getRevenueKey(u.id, "coupang");
+  res.json({
+    channels: REVENUE_CHANNELS,
+    thisMonth: db.getRevenueTotal(u.id, monthStart, today),
+    lastMonth: db.getRevenueTotal(u.id, prevMonthStart, prevMonthEnd),
+    allTime: db.getRevenueTotal(u.id, "0000-00-00", "9999-99-99"),
+    byChannel,
+    // 최근 30일 추이 (빈 날짜는 0으로 채워 그래프가 끊기지 않게)
+    trend: Array.from({ length: 30 }, (_, i) => {
+      const day = iso(new Date(d.getTime() - (29 - i) * 24 * 60 * 60 * 1000));
+      return { date: day, amount: byDate[day] || 0 };
+    }),
+    recent: entries.slice(0, 30),
+    coupang: {
+      connected: !!(key && key.accessKeyEnc),
+      lastSyncedAt: key?.lastSyncedAt || null,
+      lastError: key?.lastError || null,
+    },
+  });
+});
+
+// 직접 입력 — API가 없는 채널(애드센스·틱톡 등)이나 수동 보정용
+app.post("/api/revenue/entry", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const b = req.body || {};
+  const channel = String(b.channel || "");
+  const date = String(b.date || "");
+  if (!REVENUE_CHANNELS[channel]) return res.status(400).json({ error: "알 수 없는 채널입니다." });
+  // 형태만 맞는 "2026-13-99" 같은 값이 통과하면 집계마다 다르게 잡혀(문자열 비교라) 합계가 어긋난다.
+  // 실제 달력 날짜인지 왕복 변환으로 확인하고, 미래 날짜도 막는다.
+  const parsed = new Date(date + "T00:00:00Z");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString().slice(0, 10) !== date) {
+    return res.status(400).json({ error: "날짜 형식이 올바르지 않습니다." });
+  }
+  if (date > kstNow().date) return res.status(400).json({ error: "미래 날짜는 입력할 수 없습니다." });
+  const amount = Math.round(Number(b.amount));
+  if (!Number.isFinite(amount) || amount < 0 || amount > 1000000000) {
+    return res.status(400).json({ error: "금액을 다시 확인해 주세요." });
+  }
+  // 쿠팡은 API가 값을 덮어쓰므로 수동 입력이 무의미하다 — 헷갈리지 않게 막는다.
+  if (channel === "coupang" && db.getRevenueKey(u.id, "coupang")?.accessKeyEnc) {
+    return res.status(400).json({ error: "쿠팡은 API로 자동 수집 중이라 직접 입력할 수 없습니다." });
+  }
+  db.upsertRevenue(u.id, { date, channel, amount, source: "manual" });
+  res.json({ ok: true });
+});
+
+app.delete("/api/revenue/entry", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const b = req.body || {};
+  db.deleteRevenue(u.id, String(b.date || ""), String(b.channel || ""));
+  res.json({ ok: true });
+});
+
+// 쿠팡 파트너스 키 등록 — 저장 즉시 한 번 당겨보고, 실패하면 키를 지워 잘못된 키가 남지 않게 한다
+app.post("/api/revenue/coupang/connect", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const accessKey = String((req.body && req.body.accessKey) || "").trim();
+  const secretKey = String((req.body && req.body.secretKey) || "").trim();
+  if (!accessKey || !secretKey) return res.status(400).json({ error: "액세스 키와 시크릿 키를 모두 입력해 주세요." });
+
+  db.setRevenueKey(u.id, "coupang", encryptSecret(accessKey), encryptSecret(secretKey));
+  const result = await syncCoupangRevenue(u.id);
+  if (!result.ok) {
+    db.deleteRevenueKey(u.id, "coupang");
+    return res.status(400).json({ error: "키 확인에 실패했습니다: " + result.error });
+  }
+  res.json({ ok: true, days: result.days });
+});
+
+app.post("/api/revenue/coupang/disconnect", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  db.deleteRevenueKey(u.id, "coupang");
+  res.json({ ok: true });
+});
+
+app.post("/api/revenue/coupang/sync", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const result = await syncCoupangRevenue(u.id);
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json({ ok: true, days: result.days });
+});
+
+/* 수익 자동 수집 — 6시간마다 키가 등록된 사용자들의 쿠팡 실적을 당겨온다.
+   실패해도 다음 주기에 다시 시도하면 되므로 사유만 남기고 넘어간다. */
+const REVENUE_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+setInterval(() => {
+  let users = [];
+  try { users = db.listRevenueKeyUsers("coupang"); }
+  catch (e) { console.warn("[수익 수집 대상 조회 실패 — 무시]", e.message); return; }
+  users.reduce((chain, uid) => chain.then(() => syncCoupangRevenue(uid).catch(() => {})), Promise.resolve());
+}, REVENUE_SYNC_INTERVAL_MS);
+
 // 4) 메타 웹훅 — 댓글에 키워드 남기면 자동으로 비공개 답장(DM) 발송 (매니챗 대체, 무료·무제한)
 const IG_WEBHOOK_VERIFY_TOKEN = process.env.IG_WEBHOOK_VERIFY_TOKEN || "nexta-verify";
 // META_APP_SECRET(메타 개발자 앱의 "앱 시크릿") — 이 웹훅이 정말 메타에서 온 요청인지 서명을
