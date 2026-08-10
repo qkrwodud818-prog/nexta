@@ -1935,6 +1935,189 @@ setInterval(() => {
   users.reduce((chain, uid) => chain.then(() => syncCoupangRevenue(uid).catch(() => {})), Promise.resolve());
 }, REVENUE_SYNC_INTERVAL_MS);
 
+/* ══════════════════════════════════════════════════════════════
+   3-4) 틱톡 — 카드뉴스를 틱톡 사진 게시물 초안으로 보내기
+   MEDIA_UPLOAD(초안) 모드만 쓴다. 이유가 두 가지다.
+   ① DIRECT_POST(바로 게시)는 틱톡 심사(2~4주)를 통과해야 하고, 심사 전에는 올린 글이
+      전부 비공개로 잠긴다. 초안 모드는 심사 없이 지금 바로 쓸 수 있다.
+   ② 초안으로 들어가면 대표가 틱톡 앱에서 눈으로 확인하고 올리게 되므로, AI가 만든
+      결과물이 검토 없이 계정에 바로 나가는 위험이 없다.
+   PULL_FROM_URL을 쓰므로 카드뉴스 이미지가 외부에서 접근 가능한 주소여야 하고,
+   틱톡 개발자 콘솔에서 그 도메인을 인증(URL ownership verification)해 둬야 한다.
+   ══════════════════════════════════════════════════════════════ */
+const TIKTOK_CLIENT_KEY = process.env.TIKTOK_CLIENT_KEY || "";
+const TIKTOK_CLIENT_SECRET = process.env.TIKTOK_CLIENT_SECRET || "";
+const TIKTOK_SCOPES = "user.info.basic,video.upload"; // 초안 모드는 video.upload면 충분
+const TIKTOK_REDIRECT_URI = PUBLIC_BASE_URL + "/api/social/tiktok/callback";
+const TIKTOK_MAX_PHOTOS = 35; // 요청당 사진 상한 (틱톡 규격)
+
+function tiktokEnabled() {
+  return !!(TIKTOK_CLIENT_KEY && TIKTOK_CLIENT_SECRET);
+}
+
+async function tiktokTokenRequest(params) {
+  const resp = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.error) {
+    throw new Error(data.error_description || data.error || `틱톡 인증 실패 (${resp.status})`);
+  }
+  return data;
+}
+
+function storeTiktokTokens(userId, data, displayName) {
+  db.upsertTiktokAccount(userId, {
+    openId: data.open_id,
+    displayName: displayName || null,
+    accessTokenEnc: encryptSecret(data.access_token),
+    refreshTokenEnc: encryptSecret(data.refresh_token),
+    // 만료 5분 전을 만료로 보고 미리 갱신한다 (경계에서 실패하지 않게)
+    accessExpiresAt: new Date(Date.now() + (Number(data.expires_in) || 86400) * 1000 - 300000).toISOString(),
+    scope: data.scope || TIKTOK_SCOPES,
+  });
+}
+
+/** 유효한 액세스 토큰을 돌려준다. 만료됐으면 리프레시 토큰으로 갱신한다. */
+async function tiktokAccessToken(userId) {
+  const acct = db.getTiktokAccount(userId);
+  if (!acct || !acct.accessTokenEnc) throw new Error("틱톡 계정이 연결되어 있지 않습니다.");
+
+  if (acct.accessExpiresAt && new Date(acct.accessExpiresAt).getTime() > Date.now()) {
+    return decryptSecret(acct.accessTokenEnc);
+  }
+  // 갱신 — 틱톡은 새 리프레시 토큰을 함께 주므로 반드시 새 값으로 덮어써야 한다.
+  const data = await tiktokTokenRequest({
+    client_key: TIKTOK_CLIENT_KEY,
+    client_secret: TIKTOK_CLIENT_SECRET,
+    grant_type: "refresh_token",
+    refresh_token: decryptSecret(acct.refreshTokenEnc),
+  });
+  storeTiktokTokens(userId, data, acct.displayName);
+  return data.access_token;
+}
+
+/** 카드뉴스 이미지들을 틱톡 사진 게시물 초안으로 올린다. publish_id를 돌려준다. */
+async function tiktokUploadPhotos(userId, { title, imageUrls }) {
+  const token = await tiktokAccessToken(userId);
+  const photos = imageUrls.filter(Boolean).slice(0, TIKTOK_MAX_PHOTOS);
+  if (!photos.length) throw new Error("올릴 이미지가 없습니다.");
+
+  const resp = await fetch("https://open.tiktokapis.com/v2/post/publish/content/init/", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify({
+      media_type: "PHOTO",
+      post_mode: "MEDIA_UPLOAD", // 초안함으로 — 심사 불필요
+      post_info: { title: String(title || "").slice(0, 90) },
+      source_info: { source: "PULL_FROM_URL", photo_cover_index: 0, photo_images: photos },
+    }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  const err = data && data.error;
+  if (!resp.ok || (err && err.code && err.code !== "ok")) {
+    throw new Error((err && (err.message || err.code)) || `틱톡 업로드 실패 (${resp.status})`);
+  }
+  return data.data && data.data.publish_id;
+}
+
+app.get("/api/social/tiktok/status", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const acct = db.getTiktokAccount(u.id);
+  res.json({
+    enabled: tiktokEnabled(),
+    connected: !!(acct && acct.accessTokenEnc),
+    displayName: acct?.displayName || null,
+    lastError: acct?.lastError || null,
+  });
+});
+
+// 연결 시작 — 틱톡 인증 화면으로 보낸다. state는 CSRF 방지용이라 쿠키에 함께 심는다.
+app.get("/api/social/tiktok/connect", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!tiktokEnabled()) return res.status(400).json({ error: "틱톡 연동이 아직 설정되지 않았습니다." });
+
+  const state = crypto.randomBytes(16).toString("hex");
+  addCookie(res, "vo_tiktok_state=" + state + "; HttpOnly; Path=/; Max-Age=600; SameSite=Lax");
+  const url =
+    "https://www.tiktok.com/v2/auth/authorize/?" +
+    new URLSearchParams({
+      client_key: TIKTOK_CLIENT_KEY,
+      scope: TIKTOK_SCOPES,
+      response_type: "code",
+      redirect_uri: TIKTOK_REDIRECT_URI,
+      state,
+    }).toString();
+  res.json({ url });
+});
+
+app.get("/api/social/tiktok/callback", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.redirect("/?tiktok=fail");
+
+  const { code, state } = req.query;
+  const expected = parseCookies(req).vo_tiktok_state;
+  addCookie(res, "vo_tiktok_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax");
+  // state가 다르면 남이 유도한 연결일 수 있으므로 거부한다.
+  if (!code || !state || !expected || state !== expected) return res.redirect("/?tiktok=fail");
+
+  try {
+    const data = await tiktokTokenRequest({
+      client_key: TIKTOK_CLIENT_KEY,
+      client_secret: TIKTOK_CLIENT_SECRET,
+      code: String(code),
+      grant_type: "authorization_code",
+      redirect_uri: TIKTOK_REDIRECT_URI,
+    });
+
+    let displayName = null;
+    try {
+      const me = await fetch("https://open.tiktokapis.com/v2/user/info/?fields=display_name", {
+        headers: { Authorization: "Bearer " + data.access_token },
+      }).then((r) => r.json());
+      displayName = me?.data?.user?.display_name || null;
+    } catch { /* 이름은 부가 정보라 실패해도 연결 자체는 진행한다 */ }
+
+    storeTiktokTokens(u.id, data, displayName);
+    res.redirect("/?tiktok=success");
+  } catch (e) {
+    console.error("[틱톡 연결 실패]", e.message);
+    res.redirect("/?tiktok=fail");
+  }
+});
+
+app.post("/api/social/tiktok/disconnect", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  db.deleteTiktokAccount(u.id);
+  res.json({ ok: true });
+});
+
+// 이미 만든 카드뉴스를 틱톡 초안으로 보내기 (재생성 없이 자산을 재활용하므로 크레딧 차감 없음)
+app.post("/api/social/tiktok/post", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const b = req.body || {};
+  const title = String(b.title || "").trim().slice(0, 90);
+  const urls = Array.isArray(b.imageUrls) ? b.imageUrls.map(String) : [];
+  // 남의 서버 주소를 넣어 우리 계정으로 대신 올리게 하는 걸 막는다 — 우리 도메인만 허용.
+  const safeUrls = urls.filter((x) => x.startsWith(PUBLIC_BASE_URL + "/"));
+  if (!safeUrls.length) return res.status(400).json({ error: "올릴 카드뉴스 이미지가 없습니다." });
+
+  try {
+    const publishId = await tiktokUploadPhotos(u.id, { title, imageUrls: safeUrls });
+    res.json({ ok: true, publishId });
+  } catch (e) {
+    db.markTiktokError(u.id, e.message);
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // 4) 메타 웹훅 — 댓글에 키워드 남기면 자동으로 비공개 답장(DM) 발송 (매니챗 대체, 무료·무제한)
 const IG_WEBHOOK_VERIFY_TOKEN = process.env.IG_WEBHOOK_VERIFY_TOKEN || "nexta-verify";
 // META_APP_SECRET(메타 개발자 앱의 "앱 시크릿") — 이 웹훅이 정말 메타에서 온 요청인지 서명을

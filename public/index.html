@@ -670,6 +670,16 @@
       <div id="cnAutoProgress" style="display:none;margin-top:14px;"></div>
     </div>
 
+    <!-- ══ 틱톡 연동 ══ -->
+    <div class="cn-card" style="margin-top:16px;">
+      <div class="cn-step">🎵 틱톡으로도 올리기</div>
+      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
+        만든 카드뉴스를 틱톡 <b>초안함</b>으로 보냅니다. 틱톡 앱에서 확인하고 올리시면 돼요 —
+        심사가 필요 없어서 지금 바로 쓸 수 있고, AI가 만든 게 검토 없이 올라가지 않아 안전합니다.
+      </p>
+      <div id="ttBox"></div>
+    </div>
+
     <!-- ══ 자동 발행 예약 ══ -->
     <div class="cn-card" style="margin-top:16px;">
       <div class="cn-step">😴 자면서 벌기 — 자동 발행 예약</div>
@@ -880,7 +890,7 @@ function goTo(id){
   document.getElementById(id).classList.add('active');
   if(id === 'screen4') renderDashboard();
   if(id === 'screen3') loadKnowledgeList();
-  if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); }
+  if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); loadTiktok(); }
   if(id === 'screen6') loadRevenue();
 }
 function enterApp(){
@@ -1609,10 +1619,28 @@ function renderCardnewsHistory(){
     var thumb = (h.imageUrls&&h.imageUrls[0]) || '';
     return '<div class="cn-hist-item">'
       + (thumb?'<img src="'+esc(thumb)+'" alt="">':'')
-      + '<div><div class="nm">'+esc(h.name)+'</div><div class="tm">'+esc(h.createdAt||'')+'</div></div>'
+      + '<div style="flex:1;min-width:0;"><div class="nm">'+esc(h.name)+'</div><div class="tm">'+esc(h.createdAt||'')+'</div></div>'
+      + (tiktokConnected ? '<button class="dl" data-tt="'+esc(h.jobId||'')+'" style="background:none;border:none;cursor:pointer;">틱톡으로 보내기</button>' : '')
       + '<a class="dl" href="'+esc(thumb)+'" target="_blank" rel="noopener">다시 보기</a>'
       + '</div>';
   }).join('');
+
+  // 이미 만들어둔 카드뉴스를 틱톡 초안으로 보낸다 (재생성이 아니라 자산 재활용이라 크레딧 차감 없음)
+  box.querySelectorAll('[data-tt]').forEach(function(btn){
+    btn.onclick = function(){
+      var h = list.filter(function(x){ return String(x.jobId) === btn.getAttribute('data-tt'); })[0];
+      if(!h) return;
+      btn.disabled = true; btn.textContent = '보내는 중...';
+      fetch('/api/social/tiktok/post',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ title:h.hook || h.name, imageUrls:h.imageUrls || [] })})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        if(!res.ok){ alert('틱톡 전송 실패: ' + (res.d.error||'')); btn.disabled=false; btn.textContent='틱톡으로 보내기'; return; }
+        btn.textContent = '초안함에 있어요 ✓';
+        celebrate('🎵 틱톡 초안함으로 보냈어요. 앱에서 확인하고 올리시면 됩니다.');
+      });
+    };
+  });
 }
 document.getElementById('cnGenBtn').onclick = function(){
   var name = document.getElementById('cnName').value.trim();
@@ -1812,6 +1840,46 @@ document.getElementById('revAddBtn').onclick = function(){
   })
   .finally(function(){ b.disabled=false; });
 };
+
+/* ══════ 틱톡 ══════ */
+var tiktokConnected = false;
+function loadTiktok(){
+  fetch('/api/social/tiktok/status').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+    if(!d) return;
+    tiktokConnected = d.connected;
+    var box = document.getElementById('ttBox');
+    if(!d.enabled){
+      box.innerHTML = '<div class="topup-soon">틱톡 연동은 준비 중입니다. 틱톡 개발자 앱 등록이 끝나면 이 자리에서 바로 연결할 수 있어요.</div>';
+      return;
+    }
+    if(d.connected){
+      box.innerHTML = '<div style="font-size:13px;color:var(--green);font-weight:600;margin-bottom:8px;">✅ 연결됨'
+        + (d.displayName ? ' — ' + esc(d.displayName) : '') + '</div>'
+        + (d.lastError ? '<div class="err" style="margin-bottom:10px;">최근 오류: '+esc(d.lastError)+'</div>' : '')
+        + '<p style="font-size:12.5px;color:var(--soft);margin:0 0 10px;">아래 생성 내역에서 <b>틱톡으로 보내기</b>를 누르면 초안함에 담깁니다.</p>'
+        + '<button class="btn-sm" id="ttDisconnect">연결 해제</button>';
+      document.getElementById('ttDisconnect').onclick = function(){
+        if(!confirm('틱톡 연결을 해제할까요?')) return;
+        fetch('/api/social/tiktok/disconnect',{method:'POST'}).then(function(){ loadTiktok(); renderCardnewsHistory(); });
+      };
+    } else {
+      box.innerHTML = '<button class="btn-sm pri" id="ttConnect">틱톡 계정 연결하기</button>';
+      document.getElementById('ttConnect').onclick = function(){
+        fetch('/api/social/tiktok/connect').then(function(r){ return r.json().then(function(x){ return {ok:r.ok,d:x}; }); })
+        .then(function(res){
+          if(!res.ok){ alert(res.d.error || '연결을 시작하지 못했습니다.'); return; }
+          location.href = res.d.url;
+        });
+      };
+    }
+    renderCardnewsHistory();
+  }).catch(function(){});
+}
+(function(){
+  var qs = new URLSearchParams(location.search);
+  if(qs.get('tiktok')==='success'){ history.replaceState(null,'',location.pathname); setTimeout(function(){ celebrate('🎵 틱톡이 연결됐어요!'); },600); }
+  else if(qs.get('tiktok')==='fail'){ history.replaceState(null,'',location.pathname); alert('틱톡 연결에 실패했습니다. 다시 시도해 주세요.'); }
+})();
 
 /* ══════ 자동 발행 — 보관함 + 예약 ══════ */
 (function(){

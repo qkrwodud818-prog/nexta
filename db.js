@@ -268,6 +268,27 @@ db.exec(`
   );
 `);
 
+/* ────────────────────────── 틱톡 연동 ──────────────────────────
+ * 액세스 토큰은 24시간, 리프레시 토큰은 365일짜리라 둘 다 저장하고 만료 전에 갱신한다.
+ * 토큰은 계정 접근 권한 그 자체라 인스타 토큰과 같은 방식으로 암호화해서 넣는다.
+ * 발행은 MEDIA_UPLOAD(초안) 모드만 쓴다 — 심사 없이 바로 쓸 수 있고, 사용자가
+ * 틱톡 앱에서 최종 확인 후 올리는 구조라 계정 안전에도 유리하다.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tiktok_accounts (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    open_id TEXT,
+    display_name TEXT,
+    access_token_enc TEXT,
+    refresh_token_enc TEXT,
+    access_expires_at TEXT,
+    scope TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
+
 /* ────────────────────────── 수익 기록 ──────────────────────────
  * 비비들이 실제로 얼마를 벌어줬는지 보여주는 화면의 원천 데이터.
  * (date, channel) 단위로 하나만 유지한다 — 쿠팡 API를 다시 당겨도 중복되지 않고
@@ -953,7 +974,44 @@ function listRevenueKeyUsers(channel) {
     .map((r) => r.user_id);
 }
 
+/* ────────────────────────── 틱톡 연동 ────────────────────────── */
+
+function getTiktokAccount(userId) {
+  const row = db.prepare("SELECT * FROM tiktok_accounts WHERE user_id = ?").get(userId);
+  if (!row) return null;
+  return {
+    userId: row.user_id, openId: row.open_id, displayName: row.display_name,
+    accessTokenEnc: row.access_token_enc, refreshTokenEnc: row.refresh_token_enc,
+    accessExpiresAt: row.access_expires_at, scope: row.scope, lastError: row.last_error || null,
+  };
+}
+function upsertTiktokAccount(userId, a) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO tiktok_accounts (user_id, open_id, display_name, access_token_enc, refresh_token_enc,
+       access_expires_at, scope, last_error, created_at, updated_at)
+     VALUES (@userId, @openId, @displayName, @accessTokenEnc, @refreshTokenEnc, @accessExpiresAt, @scope, NULL, @now, @now)
+     ON CONFLICT(user_id) DO UPDATE SET
+       open_id = excluded.open_id, display_name = excluded.display_name,
+       access_token_enc = excluded.access_token_enc, refresh_token_enc = excluded.refresh_token_enc,
+       access_expires_at = excluded.access_expires_at, scope = excluded.scope,
+       last_error = NULL, updated_at = excluded.updated_at`
+  ).run({
+    userId, openId: a.openId || null, displayName: a.displayName || null,
+    accessTokenEnc: a.accessTokenEnc, refreshTokenEnc: a.refreshTokenEnc,
+    accessExpiresAt: a.accessExpiresAt, scope: a.scope || null, now,
+  });
+}
+function deleteTiktokAccount(userId) {
+  db.prepare("DELETE FROM tiktok_accounts WHERE user_id = ?").run(userId);
+}
+function markTiktokError(userId, error) {
+  db.prepare("UPDATE tiktok_accounts SET last_error = ?, updated_at = ? WHERE user_id = ?")
+    .run(error ? String(error).slice(0, 300) : null, new Date().toISOString(), userId);
+}
+
 module.exports = {
+  getTiktokAccount, upsertTiktokAccount, deleteTiktokAccount, markTiktokError,
   upsertRevenue, upsertRevenueMany, deleteRevenue, listRevenue, getRevenueTotal,
   getRevenueKey, setRevenueKey, deleteRevenueKey, markRevenueSync, listRevenueKeyUsers,
   addQueueItem, listQueue, countPendingQueue, nextPendingQueueItem, markQueueItem, deleteQueueItem,
