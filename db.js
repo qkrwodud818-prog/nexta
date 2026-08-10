@@ -268,6 +268,27 @@ db.exec(`
   );
 `);
 
+/* ────────────────────────── 영상 생성 로그 ──────────────────────────
+ * 서비스별 성공률·소요시간·실제 비용을 비교할 수 있게 모든 시도를 남긴다(지시서 5).
+ * 실패도 반드시 기록한다 — 어느 서비스가 자주 죽는지는 실패 기록에만 남기 때문이다.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS video_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    service TEXT NOT NULL,
+    ok INTEGER NOT NULL,
+    error TEXT,
+    duration_sec REAL,
+    cost_usd REAL,
+    elapsed_ms INTEGER,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS video_jobs_service_idx ON video_jobs (service, created_at DESC);
+  CREATE INDEX IF NOT EXISTS video_jobs_user_idx ON video_jobs (user_id, created_at DESC);
+`);
+
 /* ────────────────────────── 워드프레스 연동 ──────────────────────────
  * 워드프레스는 OAuth 대신 "애플리케이션 비밀번호"(WP 5.6+ 기본 기능)를 쓴다. 사용자가
  * 자기 관리자 화면에서 발급한 값이라 계정 비밀번호가 아니고, 언제든 회수할 수 있다.
@@ -1122,7 +1143,54 @@ function markWordpressError(userId, error) {
     .run(error ? String(error).slice(0, 300) : null, new Date().toISOString(), userId);
 }
 
+/* ────────────────────────── 영상 생성 로그 ────────────────────────── */
+
+function logVideoAttempt(userId, a) {
+  db.prepare(
+    `INSERT INTO video_jobs (user_id, category, service, ok, error, duration_sec, cost_usd, elapsed_ms, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    userId, a.category, a.service, a.ok ? 1 : 0, a.error || null,
+    a.durationSec == null ? null : Number(a.durationSec),
+    a.costUsd == null ? null : Number(a.costUsd),
+    a.elapsedMs == null ? null : Math.round(a.elapsedMs),
+    new Date().toISOString(),
+  );
+}
+/** 서비스별 성공률·평균 시간·누적 비용 — 어디에 돈이 새는지 보기 위한 집계. */
+function getVideoServiceStats() {
+  return db
+    .prepare(
+      `SELECT service,
+              COUNT(*) AS attempts,
+              SUM(ok) AS successes,
+              ROUND(AVG(elapsed_ms) / 1000.0, 1) AS avg_sec,
+              ROUND(SUM(COALESCE(cost_usd, 0)), 4) AS total_usd
+       FROM video_jobs GROUP BY service ORDER BY attempts DESC`
+    )
+    .all()
+    .map((r) => ({
+      service: r.service,
+      attempts: r.attempts,
+      successes: r.successes || 0,
+      successRate: r.attempts ? Math.round(((r.successes || 0) / r.attempts) * 100) : 0,
+      avgSec: r.avg_sec,
+      totalUsd: r.total_usd,
+    }));
+}
+/** 이번 달 사용자별 영상 원가 — 요금제 대비 적자 감시용. */
+function getUserVideoCostThisMonth(userId, monthPrefix) {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS n
+       FROM video_jobs WHERE user_id = ? AND ok = 1 AND created_at LIKE ?`
+    )
+    .get(userId, monthPrefix + "%");
+  return { usd: Number(row?.usd || 0), count: Number(row?.n || 0) };
+}
+
 module.exports = {
+  logVideoAttempt, getVideoServiceStats, getUserVideoCostThisMonth,
   getWordpressSite, upsertWordpressSite, deleteWordpressSite, markWordpressError,
   getYoutubeAccount, upsertYoutubeAccount, deleteYoutubeAccount, markYoutubeError,
   getTiktokAccount, upsertTiktokAccount, deleteTiktokAccount, markTiktokError,

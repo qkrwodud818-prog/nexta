@@ -1,0 +1,63 @@
+{
+  "_설명": "숏폼 영상 생성 라우팅 표. 서비스 추가·교체 시 이 파일만 고치면 되도록 코드에서 분리했다. enabled는 해당 서비스의 환경변수 키가 있을 때만 실제로 켜진다(코드에서 재확인).",
+  "_단가주의": "costPerSecUsd는 마진 계산용 추정치다. Runway·Synthesia·Opus Clip은 공개 단가가 없어 계약 후 실제 값으로 반드시 교체해야 한다. 값이 null이면 마진 계산에서 '확인 필요'로 표시된다.",
+
+  "routes": {
+    "PRESENTER": { "primary": "heygen", "fallback": "synthesia" },
+    "MOOD": { "primary": "runway", "fallback": "motion" },
+    "TRUST_EXPLAINER": { "primary": "synthesia", "fallback": "heygen" },
+    "REPURPOSE": { "primary": "opus_clip", "fallback": null },
+    "LAUNCH_IMPACT": { "primary": "motion", "fallback": "runway" }
+  },
+
+  "services": {
+    "heygen": {
+      "label": "HeyGen",
+      "envKey": "HEYGEN_API_KEY",
+      "costPerSecUsd": 0.0667,
+      "costNote": "아바타 등급별 $0.0167~0.0667/초. 최악값으로 잡아 적자를 피한다. TTS $0.0007/초 별도, 아바타 생성 1회 $1.00(프리셋 캐싱으로 회피)",
+      "requiresSourceVideo": false
+    },
+    "runway": {
+      "label": "Runway",
+      "envKey": "RUNWAY_API_KEY",
+      "costPerSecUsd": null,
+      "costNote": "사용량 기반 셀프서브 — 공개 단가 없음. 계약 전 확인 필수",
+      "requiresSourceVideo": false
+    },
+    "synthesia": {
+      "label": "Synthesia",
+      "envKey": "SYNTHESIA_API_KEY",
+      "costPerSecUsd": null,
+      "costNote": "구독 + API 별도 과금. 사전 계약 필요",
+      "requiresSourceVideo": false
+    },
+    "opus_clip": {
+      "label": "Opus Clip",
+      "envKey": "OPUS_CLIP_API_KEY",
+      "costPerSecUsd": null,
+      "costNote": "무료 티어 + 유료 플랜, 단가 비공개",
+      "requiresSourceVideo": true
+    },
+    "motion": {
+      "label": "Motion",
+      "envKey": "MOTION_API_KEY",
+      "costPerSecUsd": null,
+      "costNote": "크레딧 기반, 세션(job)당 과금",
+      "requiresSourceVideo": false
+    }
+  },
+
+  "validation": {
+    "reels": {
+      "aspectRatio": "9:16",
+      "minSeconds": 3,
+      "maxSeconds": 90,
+      "maxSizeMb": 100
+    }
+  },
+
+  "confidenceFloor": 0.6,
+  "pollTimeoutSec": 300,
+  "pollIntervalSec": 5
+}

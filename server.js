@@ -2505,6 +2505,130 @@ app.post("/api/social/wordpress/post", async (req, res) => {
   }
 });
 
+/* ══════════════════════════════════════════════════════════════
+   3-7) 숏폼 영상 자동 라우팅
+   비비가 콘텐츠 성격을 분류하고, 그 결과에 맞는 외부 영상 서비스로 보낸다.
+   서비스를 무작위로 돌리지 않고 목적에 맞춰 보내야 결과 품질이 일정해진다.
+   외부 API 키가 하나도 없으면 분류까지만 되고 생성은 "연결 안 됨"으로 정직하게 막힌다.
+   ══════════════════════════════════════════════════════════════ */
+const { createClassifier } = require("./social/video/classifier");
+const videoPipeline = require("./social/video");
+
+const classifyVideo = createClassifier({ callWithFallback, parseJSON, loadModelConfig });
+
+const USD_TO_KRW = Number(process.env.USD_TO_KRW) || 1380; // 마진 계산용 환율(대략치)
+
+/** 분류만 해보기 — 외부 API 키 없이도 라우팅 판단을 검증할 수 있다(지시서 7-1). */
+app.post("/api/video/classify", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const b = req.body || {};
+  const decision = await classifyVideo(
+    {
+      product_name: String(b.productName || "").slice(0, 200),
+      product_features: String(b.productFeatures || "").slice(0, 500),
+      price: b.price,
+      user_intent: String(b.userIntent || "").slice(0, 200),
+      has_existing_footage: !!b.hasExistingFootage,
+      source_video_url: b.sourceVideoUrl,
+      business_category: String(b.businessCategory || "").slice(0, 60),
+    },
+    { userId: u.id, jobId: "cls_" + Date.now().toString(36) },
+  );
+
+  const config = videoPipeline.loadRoutingConfig();
+  res.json({
+    ...decision,
+    route: config.routes[decision.category],
+    availableServices: videoPipeline.resolveRoute(config, decision.category),
+  });
+});
+
+/** 어떤 서비스가 실제로 연결돼 있는지 + 서비스별 성적표 */
+app.get("/api/video/status", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const config = videoPipeline.loadRoutingConfig();
+  const ready = videoPipeline.readyServices(config);
+  res.json({
+    services: Object.entries(config.services).map(([name, s]) => ({
+      name, label: s.label, connected: ready.includes(name),
+      costPerSecUsd: s.costPerSecUsd, costNote: s.costNote,
+    })),
+    routes: config.routes,
+    stats: db.getVideoServiceStats(),
+  });
+});
+
+/** 영상 생성 — 분류 → 라우팅 → 생성 → 검증 → (실패 시) 폴백 1회 */
+app.post("/api/video/generate", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) {
+    return res.status(402).json({ error: "결제 후 30일 이용 기간이 지났습니다. 다시 결제해 주세요." });
+  }
+
+  const b = req.body || {};
+  const productName = String(b.productName || "").trim().slice(0, 200);
+  if (!productName) return res.status(400).json({ error: "상품명이 필요합니다." });
+
+  const result = await videoPipeline.generateVideo(
+    {
+      product_name: productName,
+      product_features: String(b.productFeatures || "").slice(0, 500),
+      price: b.price,
+      user_intent: String(b.userIntent || "").slice(0, 200),
+      has_existing_footage: !!b.sourceVideoUrl,
+      business_category: String(b.businessCategory || "").slice(0, 60),
+
+      productName,
+      productFeatures: String(b.productFeatures || "").slice(0, 500),
+      photoUrls: Array.isArray(b.photoUrls) ? b.photoUrls.slice(0, 5).map(String) : [],
+      script: b.script ? String(b.script).slice(0, 3000) : undefined,
+      aspectRatio: "9:16",
+      durationSec: Math.min(60, Math.max(5, parseInt(b.durationSec, 10) || 15)),
+      sourceVideoUrl: b.sourceVideoUrl ? String(b.sourceVideoUrl) : undefined,
+      logCtx: { userId: u.id, jobId: "vid_" + Date.now().toString(36) },
+    },
+    classifyVideo,
+    (attempt) => db.logVideoAttempt(u.id, attempt),
+  );
+
+  if (!result.ok) return res.status(400).json({ error: result.error, decision: result.decision, attempts: result.attempts });
+  res.json(result);
+});
+
+/* 마진 시뮬레이션 (지시서 6·8) — 요금제별로 영상 몇 편까지 만들어야 적자가 나는지.
+   외부 API는 초당 과금이라, 크레딧을 얼마로 잡든 사용량이 늘면 원가가 선형으로 붙는다.
+   그래서 "몇 편에서 적자로 뒤집히는지"를 요금제마다 계산해 둔다. */
+app.get("/api/video/margin", requireAdminKey, (req, res) => {
+  const config = videoPipeline.loadRoutingConfig();
+  const durationSec = Math.min(60, Math.max(5, parseInt(req.query.seconds, 10) || 15));
+  const targetMargin = 0.7; // 재영님이 정한 순이익률 기준
+
+  const plans = Object.values(SUBSCRIPTION_PLANS).map((plan) => {
+    const budgetKrw = plan.amount * (1 - targetMargin); // 이 금액 안에서 원가를 다 감당해야 한다
+    const services = Object.entries(config.services).map(([name, s]) => {
+      if (s.costPerSecUsd == null) {
+        return { service: s.label, costPerVideoKrw: null, breakEvenVideos: null, note: "단가 미공개 — 계약 후 확인 필요" };
+      }
+      const costKrw = s.costPerSecUsd * durationSec * USD_TO_KRW;
+      return {
+        service: s.label,
+        costPerVideoKrw: Math.round(costKrw),
+        // 70% 마진을 지키면서 만들 수 있는 편수
+        videosWithinMargin: Math.floor(budgetKrw / costKrw),
+        // 원가가 요금을 넘어 순손실이 되는 편수
+        breakEvenVideos: Math.floor(plan.amount / costKrw),
+      };
+    });
+    return { plan: plan.label, priceKrw: plan.amount, marginBudgetKrw: Math.round(budgetKrw), services };
+  });
+
+  res.json({ durationSec, usdToKrw: USD_TO_KRW, targetMargin, plans });
+});
+
 // 4) 메타 웹훅 — 댓글에 키워드 남기면 자동으로 비공개 답장(DM) 발송 (매니챗 대체, 무료·무제한)
 const IG_WEBHOOK_VERIFY_TOKEN = process.env.IG_WEBHOOK_VERIFY_TOKEN || "nexta-verify";
 // META_APP_SECRET(메타 개발자 앱의 "앱 시크릿") — 이 웹훅이 정말 메타에서 온 요청인지 서명을
