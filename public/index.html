@@ -611,6 +611,27 @@
       <div id="vidServices" style="margin-top:10px;"></div>
     </div>
 
+    <!-- ══ 스마트스토어 ══ -->
+    <div class="cn-card" style="margin-bottom:16px;">
+      <div class="cn-step">🛒 스마트스토어 상세페이지</div>
+      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
+        상품 정보를 넣으면 이커머스 비비가 <b>검색 잘 되는 상품명·상세설명·태그</b>를 만들어줘요.
+        스토어를 연결하지 않아도 문구만 뽑아 직접 붙여넣으실 수 있어요.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <input id="ssName" placeholder="상품명 (예: 스테인리스 텀블러 500ml)" style="padding:9px;border-radius:8px;border:1px solid var(--line);">
+        <input id="ssFeatures" placeholder="특징 (예: 6시간 보온, 식기세척기 사용 가능)" style="padding:9px;border-radius:8px;border:1px solid var(--line);">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input id="ssPrice" type="number" placeholder="가격(원)" style="width:130px;padding:9px;border-radius:8px;border:1px solid var(--line);">
+          <input id="ssTarget" placeholder="타깃 (예: 사무실 직장인)" style="flex:1;min-width:150px;padding:9px;border-radius:8px;border:1px solid var(--line);">
+          <button class="btn-sm pri" id="ssCopyBtn">문구 만들기</button>
+        </div>
+      </div>
+      <div class="cn-cost">문구 1건당 <b id="ssCost">30</b> 크레딧이 차감돼요. 생성에 실패하면 차감되지 않습니다.</div>
+      <div id="ssResult" style="margin-top:10px;"></div>
+      <div id="ssConnectBox" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line);"></div>
+    </div>
+
     <div class="section-header"><div class="section-title">서비스별 성적표</div></div>
     <table class="dash-table">
       <thead><tr><th>서비스</th><th>시도</th><th>성공률</th><th>평균 시간</th><th>누적 비용</th></tr></thead>
@@ -962,7 +983,7 @@ function goTo(id){
   if(id === 'screen3') loadKnowledgeList();
   if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); loadTiktok(); loadYoutube(); loadWordpress(); }
   if(id === 'screen6') loadRevenue();
-  if(id === 'screen7') loadVideoStatus();
+  if(id === 'screen7'){ loadVideoStatus(); loadSmartstore(); }
 }
 function enterApp(){
   if(me){ goTo('screen2'); } else { document.getElementById('authOverlay').classList.add('show'); }
@@ -1821,6 +1842,110 @@ document.getElementById('cnPromoToggle').addEventListener('change', function(){
   .then(function(r){ return r.json(); })
   .then(function(d){ if(d.user){ me = d.user; } });
 });
+/* ══════ 스마트스토어 ══════ */
+
+/**
+ * LLM이 만든 상세설명 HTML을 화면에 넣기 전에 살균한다.
+ * 프롬프트로 "이 태그만 써라"라고 지시하긴 했지만 그건 방어가 아니다 — 모델이 형식을
+ * 어기거나 상품 정보에 스크립트가 섞여 들어오면 그대로 실행되므로, 허용 목록으로 거른다.
+ */
+function sanitizeDetailHtml(html){
+  var ALLOWED = ['H3','H4','P','UL','OL','LI','STRONG','EM','BR','SPAN','DIV'];
+  var doc = new DOMParser().parseFromString('<div id="root">' + String(html || '') + '</div>', 'text/html');
+  var root = doc.getElementById('root');
+
+  (function walk(node){
+    var children = Array.prototype.slice.call(node.children);
+    children.forEach(function(el){
+      if(ALLOWED.indexOf(el.tagName) === -1){
+        // 허용 안 된 태그는 통째로 버린다 (script/style/iframe/img 등)
+        el.remove();
+        return;
+      }
+      // 남기는 태그도 속성은 전부 제거한다 — onclick, style, href 등이 경로가 되므로.
+      Array.prototype.slice.call(el.attributes).forEach(function(a){ el.removeAttribute(a.name); });
+      walk(el);
+    });
+  })(root);
+
+  return root.innerHTML;
+}
+
+function loadSmartstore(){
+  fetch('/api/smartstore/status').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+    if(!d) return;
+    document.getElementById('ssCost').textContent = d.cost;
+    var box = document.getElementById('ssConnectBox');
+    if(d.connected){
+      box.innerHTML = '<div style="font-size:13px;color:var(--green);font-weight:600;">✅ 스마트스토어 연결됨</div>'
+        + (d.lastError ? '<div class="err" style="margin-top:6px;">최근 오류: '+esc(d.lastError)+'</div>' : '')
+        + '<button class="btn-sm" id="ssDisconnect" style="margin-top:8px;">연결 해제</button>';
+      document.getElementById('ssDisconnect').onclick = function(){
+        if(!confirm('스마트스토어 연결을 해제할까요?')) return;
+        fetch('/api/smartstore/disconnect',{method:'POST'}).then(function(){ loadSmartstore(); });
+      };
+    } else {
+      box.innerHTML = '<p style="font-size:12.5px;color:var(--soft);margin:0 0 8px;">'
+        + '스토어를 연결하면 나중에 상품 등록까지 자동화할 수 있어요. '
+        + '네이버 <b>커머스API센터</b>에서 애플리케이션을 만들면 ID와 시크릿이 나옵니다.</p>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+        + '<input id="ssClientId" placeholder="애플리케이션 ID" style="flex:1;min-width:160px;padding:9px;border-radius:8px;border:1px solid var(--line);">'
+        + '<input id="ssSecret" type="password" placeholder="애플리케이션 시크릿" style="flex:1;min-width:160px;padding:9px;border-radius:8px;border:1px solid var(--line);">'
+        + '<button class="btn-sm" id="ssConnectBtn">연결</button></div>'
+        + '<div id="ssConnectMsg" style="font-size:12.5px;margin-top:8px;"></div>';
+      document.getElementById('ssConnectBtn').onclick = function(){
+        var b=this, msg=document.getElementById('ssConnectMsg');
+        b.disabled=true; msg.innerHTML='확인 중...';
+        fetch('/api/smartstore/connect',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ clientId:document.getElementById('ssClientId').value.trim(),
+                                clientSecret:document.getElementById('ssSecret').value })})
+        .then(function(r){ return r.json().then(function(x){ return {ok:r.ok,d:x}; }); })
+        .then(function(res){
+          if(!res.ok){ msg.innerHTML='<span class="err">'+esc(res.d.error||'연결 실패')+'</span>'; b.disabled=false; return; }
+          celebrate('🛒 스마트스토어가 연결됐어요!'); loadSmartstore();
+        });
+      };
+    }
+  }).catch(function(){});
+}
+document.getElementById('ssCopyBtn').onclick = function(){
+  var name = document.getElementById('ssName').value.trim();
+  var out = document.getElementById('ssResult');
+  if(!name){ out.innerHTML='<span class="err">상품명을 적어 주세요.</span>'; return; }
+  var b=this; b.disabled=true; b.textContent='만드는 중...';
+  out.innerHTML = '<div style="font-size:13px;color:var(--soft);">이커머스 비비가 문구를 쓰고 있어요...</div>';
+  fetch('/api/smartstore/copy',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      name:name,
+      features:document.getElementById('ssFeatures').value.trim(),
+      price:Number(document.getElementById('ssPrice').value)||undefined,
+      target:document.getElementById('ssTarget').value.trim()
+    })})
+  .then(function(r){ return r.json().then(function(x){ return {ok:r.ok,d:x}; }); })
+  .then(function(res){
+    if(!res.ok){ out.innerHTML='<span class="err">'+esc(res.d.error||'실패')+'</span>'; return; }
+    var d = res.d;
+    out.innerHTML = '<div style="padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);">'
+      + '<div style="font-size:12px;color:var(--soft);">상품명</div>'
+      + '<div style="font-size:14px;font-weight:700;margin-bottom:8px;">'+esc(d.title)+'</div>'
+      + '<div style="font-size:12px;color:var(--soft);">요약</div>'
+      + '<div style="font-size:13px;margin-bottom:8px;">'+esc(d.summary||'')+'</div>'
+      + '<div style="font-size:12px;color:var(--soft);">태그</div>'
+      + '<div style="font-size:12.5px;margin-bottom:10px;">'+(d.tags||[]).map(esc).join(' · ')+'</div>'
+      + '<div style="font-size:12px;color:var(--soft);margin-bottom:4px;">상세설명 미리보기</div>'
+      + '<div style="max-height:260px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:13px;">'
+      +   sanitizeDetailHtml(d.detailHtml)
+      + '</div>'
+      + '<button class="btn-sm" id="ssCopyClip" style="margin-top:10px;">상세설명 HTML 복사</button>'
+      + '<span style="font-size:12px;color:var(--soft);margin-left:8px;">남은 크레딧 '+d.credits+'</span></div>';
+    document.getElementById('ssCopyClip').onclick = function(){
+      navigator.clipboard.writeText(d.detailHtml).then(function(){ this.textContent='복사됨 ✓'; }.bind(this));
+    };
+    if(me){ me.credits = d.credits; renderCredits(me); }
+  })
+  .finally(function(){ b.disabled=false; b.textContent='문구 만들기'; });
+};
+
 /* ══════ 숏폼 영상 ══════ */
 var VID_CATEGORY_LABEL = {
   PRESENTER: '사람이 설명하는 영상',

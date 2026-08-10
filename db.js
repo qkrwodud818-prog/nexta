@@ -268,6 +268,22 @@ db.exec(`
   );
 `);
 
+/* ────────────────────────── 스마트스토어 연동 ──────────────────────────
+ * 네이버 커머스API는 client_id + client_secret으로 매 요청마다 서명을 만들어 토큰을 받는다.
+ * 시크릿은 판매자 계정 권한 그 자체라 다른 토큰들과 같이 암호화해서 넣는다.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS smartstore_accounts (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL,
+    client_secret_enc TEXT NOT NULL,
+    seller_name TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
+
 /* ────────────────────────── 영상 생성 로그 ──────────────────────────
  * 서비스별 성공률·소요시간·실제 비용을 비교할 수 있게 모든 시도를 남긴다(지시서 5).
  * 실패도 반드시 기록한다 — 어느 서비스가 자주 죽는지는 실패 기록에만 남기 때문이다.
@@ -1189,7 +1205,36 @@ function getUserVideoCostThisMonth(userId, monthPrefix) {
   return { usd: Number(row?.usd || 0), count: Number(row?.n || 0) };
 }
 
+/* ────────────────────────── 스마트스토어 연동 ────────────────────────── */
+
+function getSmartstoreAccount(userId) {
+  const row = db.prepare("SELECT * FROM smartstore_accounts WHERE user_id = ?").get(userId);
+  if (!row) return null;
+  return {
+    userId: row.user_id, clientId: row.client_id, clientSecretEnc: row.client_secret_enc,
+    sellerName: row.seller_name, lastError: row.last_error || null,
+  };
+}
+function upsertSmartstoreAccount(userId, a) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO smartstore_accounts (user_id, client_id, client_secret_enc, seller_name, last_error, created_at, updated_at)
+     VALUES (@userId, @clientId, @clientSecretEnc, @sellerName, NULL, @now, @now)
+     ON CONFLICT(user_id) DO UPDATE SET
+       client_id = excluded.client_id, client_secret_enc = excluded.client_secret_enc,
+       seller_name = excluded.seller_name, last_error = NULL, updated_at = excluded.updated_at`
+  ).run({ userId, clientId: a.clientId, clientSecretEnc: a.clientSecretEnc, sellerName: a.sellerName || null, now });
+}
+function deleteSmartstoreAccount(userId) {
+  db.prepare("DELETE FROM smartstore_accounts WHERE user_id = ?").run(userId);
+}
+function markSmartstoreError(userId, error) {
+  db.prepare("UPDATE smartstore_accounts SET last_error = ?, updated_at = ? WHERE user_id = ?")
+    .run(error ? String(error).slice(0, 300) : null, new Date().toISOString(), userId);
+}
+
 module.exports = {
+  getSmartstoreAccount, upsertSmartstoreAccount, deleteSmartstoreAccount, markSmartstoreError,
   logVideoAttempt, getVideoServiceStats, getUserVideoCostThisMonth,
   getWordpressSite, upsertWordpressSite, deleteWordpressSite, markWordpressError,
   getYoutubeAccount, upsertYoutubeAccount, deleteYoutubeAccount, markYoutubeError,

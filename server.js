@@ -2686,6 +2686,173 @@ app.get("/api/video/margin", requireAdminKey, (req, res) => {
   res.json({ durationSec, usdToKrw: USD_TO_KRW, targetMargin, plans });
 });
 
+/* ══════════════════════════════════════════════════════════════
+   3-8) 스마트스토어 — 상세페이지 문구 생성 + 상품 등록
+   네이버 커머스API는 요청마다 bcrypt 전자서명으로 토큰을 받는 방식이다.
+   서명 = base64( bcrypt(client_id + "_" + 밀리초타임스탬프, salt = client_secret) )
+   토큰이 3시간짜리라 매번 새로 받지 않고 캐시해 둔다.
+   ══════════════════════════════════════════════════════════════ */
+const bcrypt = require("bcryptjs");
+const NAVER_COMMERCE_HOST = "https://api.commerce.naver.com/external";
+const COST_PRODUCT_COPY = 30; // 상세페이지 문구 1건 생성 시 차감 크레딧
+
+// 사용자별 토큰 캐시 — 만료 1분 전까지만 재사용한다.
+const naverTokenCache = new Map();
+
+function naverSignature(clientId, clientSecret, timestamp) {
+  // client_secret이 그대로 bcrypt salt로 쓰인다(네이버 규격).
+  const hashed = bcrypt.hashSync(`${clientId}_${timestamp}`, clientSecret);
+  return Buffer.from(hashed).toString("base64");
+}
+
+async function naverAccessToken(userId, account) {
+  const cached = naverTokenCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached.token;
+
+  const clientId = account.clientId;
+  const clientSecret = decryptSecret(account.clientSecretEnc);
+  const timestamp = Date.now();
+
+  const resp = await fetch(`${NAVER_COMMERCE_HOST}/v1/oauth2/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      timestamp: String(timestamp),
+      grant_type: "client_credentials",
+      type: "SELF",
+      client_secret_sign: naverSignature(clientId, clientSecret, timestamp),
+    }).toString(),
+    signal: AbortSignal.timeout(20000),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.access_token) {
+    throw new Error(data.message || data.error_description || `네이버 인증 실패 (${resp.status})`);
+  }
+  naverTokenCache.set(userId, {
+    token: data.access_token,
+    expiresAt: Date.now() + (Number(data.expires_in) || 10800) * 1000 - 60000,
+  });
+  return data.access_token;
+}
+
+const 상세페이지지시 = (p) => `
+당신은 스마트스토어 상세페이지를 쓰는 이커머스 담당자입니다.
+
+상품명: ${p.name}
+특징: ${p.features || "(없음)"}
+가격: ${p.price ? p.price + "원" : "(없음)"}
+타깃: ${p.target || "(일반)"}
+
+아래 JSON으로만 답하세요. 다른 텍스트는 쓰지 마세요.
+{
+  "title": "검색에 걸리는 상품명 (50자 이내, 핵심 키워드 앞쪽 배치)",
+  "summary": "한 줄 요약 (40자 이내)",
+  "detailHtml": "상세설명 HTML",
+  "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"]
+}
+
+작성 규칙:
+- detailHtml은 <h3>, <p>, <ul>, <li>, <strong>만 사용하세요. script·style·외부 이미지 태그는 절대 넣지 마세요.
+- 구매자가 궁금해할 순서로 씁니다: 어떤 문제를 해결하는지 → 특징 → 사용법 → 주의사항.
+- 확실하지 않은 스펙(치수·무게·인증 등)은 지어내지 말고 "상세 스펙은 상품 이미지 참고"로 처리하세요.
+- 의료·건강 효능처럼 과장 광고로 문제될 표현은 쓰지 마세요.`;
+
+app.get("/api/smartstore/status", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const a = db.getSmartstoreAccount(u.id);
+  res.json({
+    connected: !!a,
+    sellerName: a?.sellerName || null,
+    lastError: a?.lastError || null,
+    cost: COST_PRODUCT_COPY,
+  });
+});
+
+app.post("/api/smartstore/connect", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const clientId = String((req.body && req.body.clientId) || "").trim();
+  const clientSecret = String((req.body && req.body.clientSecret) || "").trim();
+  if (!clientId || !clientSecret) return res.status(400).json({ error: "애플리케이션 ID와 시크릿을 모두 입력해 주세요." });
+
+  const account = { clientId, clientSecretEnc: encryptSecret(clientSecret) };
+  try {
+    // 저장 전에 실제로 토큰이 발급되는지 확인한다 — 잘못된 키가 저장되지 않게.
+    await naverAccessToken("probe:" + u.id, account);
+    naverTokenCache.delete("probe:" + u.id);
+    db.upsertSmartstoreAccount(u.id, account);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: "키 확인에 실패했습니다: " + e.message });
+  }
+});
+
+app.post("/api/smartstore/disconnect", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  naverTokenCache.delete(u.id);
+  db.deleteSmartstoreAccount(u.id);
+  res.json({ ok: true });
+});
+
+/** 상세페이지 문구 생성 — 스토어 연결 없이도 쓸 수 있다(문구만 뽑아 직접 붙여넣어도 되므로). */
+app.post("/api/smartstore/copy", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) return res.status(402).json({ error: "결제 후 30일 이용 기간이 지났습니다." });
+
+  const b = req.body || {};
+  const name = String(b.name || "").trim().slice(0, 200);
+  if (!name) return res.status(400).json({ error: "상품명을 적어 주세요." });
+  if ((u.credits || 0) < COST_PRODUCT_COPY) {
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다." });
+  }
+
+  try {
+    const config = loadModelConfig();
+    const result = await callWithFallback(
+      config, "전문_이커머스",
+      상세페이지지시({ name, features: b.features, price: b.price, target: b.target }),
+      false, 2600, { userId: u.id, jobId: "ss_" + Date.now().toString(36) },
+    );
+    const parsed = parseJSON(result.text);
+    if (!parsed || !parsed.title || !parsed.detailHtml) throw new Error("문구 생성에 실패했습니다. 상품 정보를 조금 더 적어 주세요.");
+
+    const remaining = chargeUser(u.id, COST_PRODUCT_COPY, { kind: "상세페이지 문구", label: name.slice(0, 60) });
+    res.json({ ok: true, ...parsed, credits: remaining });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/** 카테고리 검색 — 상품 등록에 categoryId가 필요해서 먼저 찾아야 한다. */
+app.get("/api/smartstore/categories", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const account = db.getSmartstoreAccount(u.id);
+  if (!account) return res.status(400).json({ error: "먼저 스마트스토어를 연결해 주세요." });
+
+  try {
+    const token = await naverAccessToken(u.id, account);
+    const resp = await fetch(`${NAVER_COMMERCE_HOST}/v1/categories`, {
+      headers: { Authorization: "Bearer " + token },
+      signal: AbortSignal.timeout(20000),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.message || `카테고리 조회 실패 (${resp.status})`);
+    const q = String(req.query.q || "").trim();
+    const list = (Array.isArray(data) ? data : data.contents || [])
+      .filter((c) => !q || String(c.name || c.wholeCategoryName || "").includes(q))
+      .slice(0, 50);
+    res.json({ categories: list });
+  } catch (e) {
+    db.markSmartstoreError(u.id, e.message);
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // 4) 메타 웹훅 — 댓글에 키워드 남기면 자동으로 비공개 답장(DM) 발송 (매니챗 대체, 무료·무제한)
 const IG_WEBHOOK_VERIFY_TOKEN = process.env.IG_WEBHOOK_VERIFY_TOKEN || "nexta-verify";
 // META_APP_SECRET(메타 개발자 앱의 "앱 시크릿") — 이 웹훅이 정말 메타에서 온 요청인지 서명을
