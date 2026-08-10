@@ -268,6 +268,23 @@ db.exec(`
   );
 `);
 
+/* ────────────────────────── 유튜브 연동 ──────────────────────────
+ * 구글 OAuth는 refresh_token을 최초 동의 때 한 번만 내려주므로(access_type=offline +
+ * prompt=consent), 재연결 시 새 값이 안 오면 기존 값을 지우지 않고 유지해야 한다.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS youtube_accounts (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    channel_title TEXT,
+    access_token_enc TEXT,
+    refresh_token_enc TEXT,
+    access_expires_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
+
 /* ────────────────────────── 틱톡 연동 ──────────────────────────
  * 액세스 토큰은 24시간, 리프레시 토큰은 365일짜리라 둘 다 저장하고 만료 전에 갱신한다.
  * 토큰은 계정 접근 권한 그 자체라 인스타 토큰과 같은 방식으로 암호화해서 넣는다.
@@ -1010,7 +1027,52 @@ function markTiktokError(userId, error) {
     .run(error ? String(error).slice(0, 300) : null, new Date().toISOString(), userId);
 }
 
+/* ────────────────────────── 유튜브 연동 ────────────────────────── */
+
+function getYoutubeAccount(userId) {
+  const row = db.prepare("SELECT * FROM youtube_accounts WHERE user_id = ?").get(userId);
+  if (!row) return null;
+  return {
+    userId: row.user_id, channelTitle: row.channel_title,
+    accessTokenEnc: row.access_token_enc, refreshTokenEnc: row.refresh_token_enc,
+    accessExpiresAt: row.access_expires_at, lastError: row.last_error || null,
+  };
+}
+/**
+ * refreshTokenEnc가 null이면 기존 값을 유지한다 — 구글은 재동의 때 refresh_token을
+ * 다시 주지 않는 경우가 있어서, 그대로 덮어쓰면 갱신 수단을 잃어버린다.
+ */
+function upsertYoutubeAccount(userId, a) {
+  const now = new Date().toISOString();
+  const existing = getYoutubeAccount(userId);
+  db.prepare(
+    `INSERT INTO youtube_accounts (user_id, channel_title, access_token_enc, refresh_token_enc,
+       access_expires_at, last_error, created_at, updated_at)
+     VALUES (@userId, @channelTitle, @accessTokenEnc, @refreshTokenEnc, @accessExpiresAt, NULL, @now, @now)
+     ON CONFLICT(user_id) DO UPDATE SET
+       channel_title = excluded.channel_title,
+       access_token_enc = excluded.access_token_enc,
+       refresh_token_enc = excluded.refresh_token_enc,
+       access_expires_at = excluded.access_expires_at,
+       last_error = NULL, updated_at = excluded.updated_at`
+  ).run({
+    userId,
+    channelTitle: a.channelTitle != null ? a.channelTitle : existing?.channelTitle || null,
+    accessTokenEnc: a.accessTokenEnc,
+    refreshTokenEnc: a.refreshTokenEnc || existing?.refreshTokenEnc || null,
+    accessExpiresAt: a.accessExpiresAt, now,
+  });
+}
+function deleteYoutubeAccount(userId) {
+  db.prepare("DELETE FROM youtube_accounts WHERE user_id = ?").run(userId);
+}
+function markYoutubeError(userId, error) {
+  db.prepare("UPDATE youtube_accounts SET last_error = ?, updated_at = ? WHERE user_id = ?")
+    .run(error ? String(error).slice(0, 300) : null, new Date().toISOString(), userId);
+}
+
 module.exports = {
+  getYoutubeAccount, upsertYoutubeAccount, deleteYoutubeAccount, markYoutubeError,
   getTiktokAccount, upsertTiktokAccount, deleteTiktokAccount, markTiktokError,
   upsertRevenue, upsertRevenueMany, deleteRevenue, listRevenue, getRevenueTotal,
   getRevenueKey, setRevenueKey, deleteRevenueKey, markRevenueSync, listRevenueKeyUsers,

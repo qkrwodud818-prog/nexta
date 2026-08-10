@@ -5,3 +5,4 @@ data/*.json
 data/*.db
 data/*.db-*
 public/cardnews/
+public/shorts/

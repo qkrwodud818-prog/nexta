@@ -20,6 +20,7 @@ const crypto = require("crypto");
 require("dotenv").config();
 
 const { generateCardNews } = require("./social/cardnews");
+const { generateShort } = require("./social/shorts");
 const { publishCarouselPost, verifyWebhook, handleCommentWebhook } = require("./social/instagram");
 const db = require("./db"); // SQLite(better-sqlite3) 기반 저장소 — data/nexta.db
 
@@ -2115,6 +2116,215 @@ app.post("/api/social/tiktok/post", async (req, res) => {
   } catch (e) {
     db.markTiktokError(u.id, e.message);
     res.status(400).json({ error: e.message });
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════
+   3-5) 유튜브 숏츠 — 카드뉴스를 세로 영상으로 만들어 업로드
+   틱톡과 구조가 같다. 심사를 통과하기 전에는 API로 올린 영상이 유튜브 쪽에서 자동으로
+   비공개로 잠기므로, 애초에 privacyStatus를 private으로 올리고 대표가 유튜브 스튜디오에서
+   확인한 뒤 공개하게 한다(잠긴 줄 모르고 기다리는 상황을 만들지 않기 위함).
+   할당량도 유한하다 — 기본 하루 videos.insert 100건이라 예약 발행과 함께 써도 넉넉하다.
+   ══════════════════════════════════════════════════════════════ */
+const YOUTUBE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || "";
+const YOUTUBE_CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || "";
+const YOUTUBE_REDIRECT_URI = PUBLIC_BASE_URL + "/api/social/youtube/callback";
+const YOUTUBE_SCOPES = "https://www.googleapis.com/auth/youtube.upload";
+
+function youtubeEnabled() {
+  return !!(YOUTUBE_CLIENT_ID && YOUTUBE_CLIENT_SECRET);
+}
+
+async function googleTokenRequest(params) {
+  const resp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.error) {
+    throw new Error(data.error_description || data.error || `구글 인증 실패 (${resp.status})`);
+  }
+  return data;
+}
+
+function storeYoutubeTokens(userId, data, channelTitle) {
+  db.upsertYoutubeAccount(userId, {
+    channelTitle: channelTitle !== undefined ? channelTitle : null,
+    accessTokenEnc: encryptSecret(data.access_token),
+    // 구글은 재동의 때 refresh_token을 생략할 수 있다 — 없으면 db 계층이 기존 값을 지킨다.
+    refreshTokenEnc: data.refresh_token ? encryptSecret(data.refresh_token) : null,
+    accessExpiresAt: new Date(Date.now() + (Number(data.expires_in) || 3600) * 1000 - 300000).toISOString(),
+  });
+}
+
+async function youtubeAccessToken(userId) {
+  const acct = db.getYoutubeAccount(userId);
+  if (!acct || !acct.accessTokenEnc) throw new Error("유튜브 계정이 연결되어 있지 않습니다.");
+  if (acct.accessExpiresAt && new Date(acct.accessExpiresAt).getTime() > Date.now()) {
+    return decryptSecret(acct.accessTokenEnc);
+  }
+  if (!acct.refreshTokenEnc) throw new Error("유튜브 재연결이 필요합니다.");
+  const data = await googleTokenRequest({
+    client_id: YOUTUBE_CLIENT_ID,
+    client_secret: YOUTUBE_CLIENT_SECRET,
+    grant_type: "refresh_token",
+    refresh_token: decryptSecret(acct.refreshTokenEnc),
+  });
+  storeYoutubeTokens(userId, data, acct.channelTitle);
+  return data.access_token;
+}
+
+/** 영상 파일을 유튜브에 업로드한다. 심사 전이므로 항상 비공개로 올린다. */
+async function youtubeUpload(userId, { filePath, title, description }) {
+  const token = await youtubeAccessToken(userId);
+  const meta = {
+    snippet: {
+      title: String(title || "넥스타 숏츠").slice(0, 100),
+      description: String(description || "").slice(0, 4900),
+      categoryId: "22",
+    },
+    // 심사 전 API 업로드는 유튜브가 어차피 비공개로 잠근다. 명시적으로 private으로 올려
+    // "왜 안 보이지?" 하는 혼란을 없애고, 확인 후 스튜디오에서 공개하도록 안내한다.
+    status: { privacyStatus: "private", selfDeclaredMadeForKids: false },
+  };
+
+  const bytes = fs.readFileSync(filePath);
+  const resp = await fetch(
+    "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "multipart/related; boundary=nexta_boundary",
+      },
+      body: Buffer.concat([
+        Buffer.from(
+          "--nexta_boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" +
+            JSON.stringify(meta) +
+            "\r\n--nexta_boundary\r\nContent-Type: video/mp4\r\n\r\n",
+        ),
+        bytes,
+        Buffer.from("\r\n--nexta_boundary--\r\n"),
+      ]),
+    },
+  );
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.error) {
+    throw new Error(data.error?.message || `유튜브 업로드 실패 (${resp.status})`);
+  }
+  return data.id;
+}
+
+app.get("/api/social/youtube/status", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const acct = db.getYoutubeAccount(u.id);
+  res.json({
+    enabled: youtubeEnabled(),
+    connected: !!(acct && acct.accessTokenEnc),
+    channelTitle: acct?.channelTitle || null,
+    lastError: acct?.lastError || null,
+  });
+});
+
+app.get("/api/social/youtube/connect", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!youtubeEnabled()) return res.status(400).json({ error: "유튜브 연동이 아직 설정되지 않았습니다." });
+
+  const state = crypto.randomBytes(16).toString("hex");
+  addCookie(res, "vo_yt_state=" + state + "; HttpOnly; Path=/; Max-Age=600; SameSite=Lax");
+  const url =
+    "https://accounts.google.com/o/oauth2/v2/auth?" +
+    new URLSearchParams({
+      client_id: YOUTUBE_CLIENT_ID,
+      redirect_uri: YOUTUBE_REDIRECT_URI,
+      response_type: "code",
+      scope: YOUTUBE_SCOPES,
+      // offline + consent 조합이라야 refresh_token을 확실히 받는다.
+      access_type: "offline",
+      prompt: "consent",
+      state,
+    }).toString();
+  res.json({ url });
+});
+
+app.get("/api/social/youtube/callback", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.redirect("/?youtube=fail");
+  const { code, state } = req.query;
+  const expected = parseCookies(req).vo_yt_state;
+  addCookie(res, "vo_yt_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax");
+  if (!code || !state || !expected || state !== expected) return res.redirect("/?youtube=fail");
+
+  try {
+    const data = await googleTokenRequest({
+      client_id: YOUTUBE_CLIENT_ID,
+      client_secret: YOUTUBE_CLIENT_SECRET,
+      code: String(code),
+      grant_type: "authorization_code",
+      redirect_uri: YOUTUBE_REDIRECT_URI,
+    });
+
+    let channelTitle = null;
+    try {
+      const ch = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", {
+        headers: { Authorization: "Bearer " + data.access_token },
+      }).then((r) => r.json());
+      channelTitle = ch?.items?.[0]?.snippet?.title || null;
+    } catch { /* 채널명은 부가 정보 */ }
+
+    storeYoutubeTokens(u.id, data, channelTitle);
+    res.redirect("/?youtube=success");
+  } catch (e) {
+    console.error("[유튜브 연결 실패]", e.message);
+    res.redirect("/?youtube=fail");
+  }
+});
+
+app.post("/api/social/youtube/disconnect", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  db.deleteYoutubeAccount(u.id);
+  res.json({ ok: true });
+});
+
+/* 카드뉴스 → 숏츠 영상 만들어 업로드.
+   이미 만들어둔 이미지를 재활용하는 것이라 AI 호출이 없어 크레딧을 받지 않는다. */
+app.post("/api/social/youtube/short", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const b = req.body || {};
+  const urls = Array.isArray(b.imageUrls) ? b.imageUrls.map(String) : [];
+  // 우리 도메인 이미지만 — 남의 파일을 우리 서버가 대신 받아오게 만들지 않는다(SSRF 방지).
+  const localPaths = urls
+    .filter((x) => x.startsWith(PUBLIC_BASE_URL + "/"))
+    .map((x) => path.join(__dirname, "public", x.slice(PUBLIC_BASE_URL.length)))
+    .filter((p) => p.startsWith(path.join(__dirname, "public")) && fs.existsSync(p));
+
+  if (!localPaths.length) return res.status(400).json({ error: "영상으로 만들 카드뉴스가 없습니다." });
+
+  const slug = crypto.randomBytes(6).toString("hex");
+  const outDir = path.join(__dirname, "public", "shorts", slug);
+  fs.mkdirSync(outDir, { recursive: true });
+  const outPath = path.join(outDir, "short.mp4");
+
+  try {
+    await generateShort(localPaths, outPath);
+    const videoId = await youtubeUpload(u.id, {
+      filePath: outPath,
+      title: b.title || "오늘의 추천",
+      description: (b.description || "") + "\n\n#shorts",
+    });
+    res.json({ ok: true, videoId, url: "https://youtube.com/watch?v=" + videoId });
+  } catch (e) {
+    db.markYoutubeError(u.id, e.message);
+    res.status(400).json({ error: e.message });
+  } finally {
+    // 업로드가 끝나면 서버에 영상을 남겨둘 이유가 없다 (무료 호스팅 디스크 절약)
+    fs.rmSync(outDir, { recursive: true, force: true });
   }
 });
 

@@ -680,6 +680,16 @@
       <div id="ttBox"></div>
     </div>
 
+    <!-- ══ 유튜브 숏츠 ══ -->
+    <div class="cn-card" style="margin-top:16px;">
+      <div class="cn-step">▶️ 유튜브 숏츠로 만들기</div>
+      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
+        카드뉴스를 <b>세로 영상(9:16)</b>으로 만들어 유튜브에 올려요. 심사 전에는 유튜브가 API 업로드를
+        자동으로 비공개 처리하므로 <b>비공개로 올린 뒤</b> 스튜디오에서 확인하고 공개하시면 됩니다.
+      </p>
+      <div id="ytBox"></div>
+    </div>
+
     <!-- ══ 자동 발행 예약 ══ -->
     <div class="cn-card" style="margin-top:16px;">
       <div class="cn-step">😴 자면서 벌기 — 자동 발행 예약</div>
@@ -890,7 +900,7 @@ function goTo(id){
   document.getElementById(id).classList.add('active');
   if(id === 'screen4') renderDashboard();
   if(id === 'screen3') loadKnowledgeList();
-  if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); loadTiktok(); }
+  if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); loadTiktok(); loadYoutube(); }
   if(id === 'screen6') loadRevenue();
 }
 function enterApp(){
@@ -1621,9 +1631,27 @@ function renderCardnewsHistory(){
       + (thumb?'<img src="'+esc(thumb)+'" alt="">':'')
       + '<div style="flex:1;min-width:0;"><div class="nm">'+esc(h.name)+'</div><div class="tm">'+esc(h.createdAt||'')+'</div></div>'
       + (tiktokConnected ? '<button class="dl" data-tt="'+esc(h.jobId||'')+'" style="background:none;border:none;cursor:pointer;">틱톡으로 보내기</button>' : '')
+      + (youtubeConnected ? '<button class="dl" data-yt="'+esc(h.jobId||'')+'" style="background:none;border:none;cursor:pointer;">숏츠로 올리기</button>' : '')
       + '<a class="dl" href="'+esc(thumb)+'" target="_blank" rel="noopener">다시 보기</a>'
       + '</div>';
   }).join('');
+
+  // 카드뉴스 → 세로 영상 변환 후 유튜브 업로드 (영상 만드는 데 몇 초 걸린다)
+  box.querySelectorAll('[data-yt]').forEach(function(btn){
+    btn.onclick = function(){
+      var h = list.filter(function(x){ return String(x.jobId) === btn.getAttribute('data-yt'); })[0];
+      if(!h) return;
+      btn.disabled = true; btn.textContent = '영상 만드는 중...';
+      fetch('/api/social/youtube/short',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ title:h.hook || h.name, description:h.name, imageUrls:h.imageUrls || [] })})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        if(!res.ok){ alert('유튜브 업로드 실패: ' + (res.d.error||'')); btn.disabled=false; btn.textContent='숏츠로 올리기'; return; }
+        btn.textContent = '업로드됨 ✓';
+        celebrate('▶️ 숏츠가 비공개로 올라갔어요. 유튜브 스튜디오에서 확인 후 공개하세요.');
+      });
+    };
+  });
 
   // 이미 만들어둔 카드뉴스를 틱톡 초안으로 보낸다 (재생성이 아니라 자산 재활용이라 크레딧 차감 없음)
   box.querySelectorAll('[data-tt]').forEach(function(btn){
@@ -1840,6 +1868,46 @@ document.getElementById('revAddBtn').onclick = function(){
   })
   .finally(function(){ b.disabled=false; });
 };
+
+/* ══════ 유튜브 숏츠 ══════ */
+var youtubeConnected = false;
+function loadYoutube(){
+  fetch('/api/social/youtube/status').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+    if(!d) return;
+    youtubeConnected = d.connected;
+    var box = document.getElementById('ytBox');
+    if(!d.enabled){
+      box.innerHTML = '<div class="topup-soon">유튜브 연동은 준비 중입니다. 구글 클라우드 앱 등록이 끝나면 이 자리에서 바로 연결할 수 있어요.</div>';
+      return;
+    }
+    if(d.connected){
+      box.innerHTML = '<div style="font-size:13px;color:var(--green);font-weight:600;margin-bottom:8px;">✅ 연결됨'
+        + (d.channelTitle ? ' — ' + esc(d.channelTitle) : '') + '</div>'
+        + (d.lastError ? '<div class="err" style="margin-bottom:10px;">최근 오류: '+esc(d.lastError)+'</div>' : '')
+        + '<p style="font-size:12.5px;color:var(--soft);margin:0 0 10px;">아래 생성 내역에서 <b>숏츠로 올리기</b>를 누르면 영상으로 변환돼 업로드됩니다.</p>'
+        + '<button class="btn-sm" id="ytDisconnect">연결 해제</button>';
+      document.getElementById('ytDisconnect').onclick = function(){
+        if(!confirm('유튜브 연결을 해제할까요?')) return;
+        fetch('/api/social/youtube/disconnect',{method:'POST'}).then(function(){ loadYoutube(); renderCardnewsHistory(); });
+      };
+    } else {
+      box.innerHTML = '<button class="btn-sm pri" id="ytConnect">유튜브 계정 연결하기</button>';
+      document.getElementById('ytConnect').onclick = function(){
+        fetch('/api/social/youtube/connect').then(function(r){ return r.json().then(function(x){ return {ok:r.ok,d:x}; }); })
+        .then(function(res){
+          if(!res.ok){ alert(res.d.error || '연결을 시작하지 못했습니다.'); return; }
+          location.href = res.d.url;
+        });
+      };
+    }
+    renderCardnewsHistory();
+  }).catch(function(){});
+}
+(function(){
+  var qs = new URLSearchParams(location.search);
+  if(qs.get('youtube')==='success'){ history.replaceState(null,'',location.pathname); setTimeout(function(){ celebrate('▶️ 유튜브가 연결됐어요!'); },600); }
+  else if(qs.get('youtube')==='fail'){ history.replaceState(null,'',location.pathname); alert('유튜브 연결에 실패했습니다. 다시 시도해 주세요.'); }
+})();
 
 /* ══════ 틱톡 ══════ */
 var tiktokConnected = false;
