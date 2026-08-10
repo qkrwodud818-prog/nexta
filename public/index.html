@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>넥스타 — AI 직원을 고용하세요</title>
 <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script src="https://js.tosspayments.com/v2/standard"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -12,9 +15,38 @@
     --purple:#7c3aed; --purple-d:#6d28d9; --blue:#3b82f6; --blue-d:#2563eb;
     --ink:#111827; --soft:#6b7280; --line:#e5e7eb; --bg:#f9fafb;
     --green:#16a34a; --red:#ef4444; --amber:#d97706;
+
+    /* 세 벌짜리 활자 체계.
+       본문은 Pretendard(한글 가독성), 제목은 IBM Plex Sans KR(약간의 기계적인 인상 —
+       'AI 직원'이라는 제품 성격과 맞다), 그리고 숫자·시각·사번은 모두 고정폭으로 간다.
+       마지막 것이 핵심이다: 근무 시각, 비비 사번, 크레딧이 같은 활자로 정렬되면
+       화면이 '근무 기록'처럼 읽히고, 그게 이 제품이 파는 감각이다. */
     --f:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',sans-serif;
+    --f-display:'IBM Plex Sans KR','Pretendard','Apple SD Gothic Neo',sans-serif;
+    /* 한글 대체 서체를 반드시 뒤에 붙인다. IBM Plex Mono에는 한글 글리프가 없어서
+       이게 없으면 '작업 중' 같은 한글이 generic monospace로 떨어지며 깨져 보인다.
+       CSS 서체 대체는 글자 단위라, 숫자·영문은 고정폭 / 한글은 Pretendard로 갈린다. */
+    --f-data:'IBM Plex Mono','SFMono-Regular',Consolas,'Pretendard','Apple SD Gothic Neo',monospace;
   }
   body { font-family: var(--f); overflow: hidden; height: 100vh; width: 100vw; color:var(--ink); -webkit-font-smoothing:antialiased; }
+
+  /* ── 활자 위계 ──────────────────────────────────────────────
+     크기만으로 나누면 한글에서는 위계가 흐려진다. 서체·굵기·자간·색을
+     함께 움직여야 제목이 제목으로 읽힌다. */
+  h1,h2,h3,.display{ font-family:var(--f-display); letter-spacing:-.02em; }
+  .t-data{ font-family:var(--f-data); font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
+  /* 구획 라벨 — 한글은 대문자가 없으므로 자간과 색으로 라벨임을 알린다 */
+  .t-label{ font-family:var(--f-display); font-size:11.5px; font-weight:600; letter-spacing:.14em;
+    color:var(--soft); display:flex; align-items:center; gap:9px; }
+  .t-label::after{ content:''; flex:1; height:1px; background:var(--line); }
+
+  /* ── 채널 격자 ──────────────────────────────────────────────
+     연결 카드 5개를 세로로 쌓으면 전부 같은 무게로 읽혀서 어디부터 손대야 할지
+     알 수 없다. 매일 쓰는 작업(가져오기·예약)은 넓게 두고, 채널은 한 번 연결하면
+     끝나는 설정이므로 작은 격자로 접어 둔다. */
+  .channel-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:12px; align-items:start; }
+  @media(max-width:900px){ .channel-grid{ grid-template-columns:1fr; } }
+  .channel-grid .cn-card{ margin-top:0 !important; }
   .screen { display: none; width: 100%; height: 100vh; }
   .screen.active { display: flex; }
   button{ font-family:var(--f); }
@@ -33,11 +65,43 @@
   .btn-pill { background:var(--purple); color:#fff; border:none; border-radius:999px; padding:10px 22px;
     font-size:14px; font-weight:700; cursor:pointer; transition:background .2s, transform .15s; }
   .btn-pill:hover { background:var(--purple-d); transform:translateY(-1px); }
-  .hero-body { position:relative; z-index:10; flex:1; display:flex; align-items:center; justify-content:center; padding:0 48px 48px; }
-  .hero-left { flex:1; max-width:720px; text-align:center; }
-  .hero-headline { color:#fff; font-size:clamp(36px,5vw,60px); font-weight:800; line-height:1.15; letter-spacing:-1.5px; margin-bottom:20px; }
-  .hero-sub { color:rgba(255,255,255,.75); font-size:16px; line-height:1.6; margin-bottom:30px; }
-  .hero-pts{ display:flex; gap:18px; flex-wrap:wrap; margin-bottom:30px; justify-content:center; }
+  .hero-body { position:relative; z-index:10; flex:1; display:flex; align-items:center; justify-content:center;
+    gap:56px; padding:0 48px 48px; }
+  .hero-left { flex:1; max-width:560px; }
+
+  /* ── 근무 현황판 ────────────────────────────────────────────
+     이 제품이 파는 것은 도구가 아니라 "고용"이다. 그래서 히어로에는 마스코트 대신
+     사무실 벽에 걸린 근무표를 놓는다. 표는 히어로 비주얼로 흔한 선택이 아니지만,
+     "지금 누가 무슨 일을 하고 있다"를 보여주는 데는 그림보다 표가 강하다.
+     시각과 사번을 고정폭으로 정렬해 실제 근무 기록처럼 읽히게 한다. */
+  .shiftboard{ flex:0 0 380px; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.14);
+    border-radius:16px; padding:16px 18px 12px; backdrop-filter:blur(8px); }
+  @media(max-width:940px){ .shiftboard{ display:none; } }
+  .shiftboard-head{ display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+    padding-bottom:11px; border-bottom:1px solid rgba(255,255,255,.14); margin-bottom:4px; }
+  .shiftboard-head b{ font-family:var(--f-display); font-size:12.5px; font-weight:600; color:#fff;
+    letter-spacing:.1em; }
+  .shiftboard-clock{ font-family:var(--f-data); font-size:12px; color:rgba(255,255,255,.55);
+    font-variant-numeric:tabular-nums; }
+  .shiftrow{ display:flex; align-items:center; gap:10px; padding:7px 0; }
+  .shiftrow .id{ font-family:var(--f-data); font-size:11px; color:rgba(255,255,255,.4); width:26px; flex-shrink:0; }
+  .shiftrow .who{ font-size:12.5px; color:rgba(255,255,255,.9); flex:1; min-width:0;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .shiftrow .st{ font-family:var(--f-data); font-size:10.5px; letter-spacing:.02em; padding:2px 8px;
+    border-radius:999px; flex-shrink:0; }
+  .st.on{ color:#c4b5fd; background:rgba(124,58,237,.3); }
+  .st.done{ color:rgba(255,255,255,.45); background:rgba(255,255,255,.07); }
+  .shiftboard-foot{ margin-top:8px; padding-top:10px; border-top:1px solid rgba(255,255,255,.14);
+    font-size:11.5px; color:rgba(255,255,255,.5); }
+  /* 상태가 바뀔 때만 아주 짧게 — 배경에서 계속 움직이면 읽기를 방해한다 */
+  @keyframes shiftIn{ from{ opacity:.25; } to{ opacity:1; } }
+  .shiftrow .st.just{ animation:shiftIn .5s ease; }
+  @media(prefers-reduced-motion:reduce){ .shiftrow .st.just{ animation:none; } }
+  .hero-headline { font-family:var(--f-display); color:#fff; font-size:clamp(34px,4.6vw,54px); font-weight:700;
+    line-height:1.14; letter-spacing:-.035em; margin-bottom:18px; }
+  .hero-headline em{ font-style:normal; color:#a78bfa; }
+  .hero-sub { color:rgba(255,255,255,.72); font-size:15.5px; line-height:1.7; margin-bottom:26px; max-width:44ch; }
+  .hero-pts{ display:flex; gap:18px; flex-wrap:wrap; margin-bottom:30px; }
   .hero-pts div{ color:rgba(255,255,255,.85); font-size:13.5px; display:flex; gap:6px; align-items:center; }
 
   /* ══════ APP LAYOUT ══════ */
@@ -87,7 +151,7 @@
 
   /* ══════ SCREEN 2 — 홈 ══════ */
   #screen2 .main-content { background:linear-gradient(180deg,#ede9fe 0%,#f5f3ff 25%,#fff 60%); }
-  .dashboard-title { text-align:center; color:var(--purple); font-size:31px; font-weight:800; margin-bottom:20px; letter-spacing:-.02em; }
+  .dashboard-title { font-family:var(--f-display); text-align:center; color:var(--ink); font-size:29px; font-weight:700; margin-bottom:20px; letter-spacing:-.03em; }
   .search-bar { display:flex; align-items:flex-end; background:#fff; border-radius:26px; padding:10px 10px 10px 22px;
     box-shadow:0 4px 20px rgba(0,0,0,.08); margin-bottom:14px; gap:12px; }
   .search-bar textarea { flex:1; border:none; outline:none; font-size:15px; color:#374151; background:transparent;
@@ -117,7 +181,7 @@
   .ai-card.manager-bar .crow{ flex-shrink:0; gap:12px; }
   @media(max-width:640px){ .ai-card.manager-bar .crole{ display:none; } }
   .section-header { display:flex; align-items:center; margin-bottom:14px; gap:10px; }
-  .section-title { font-size:18px; font-weight:800; color:var(--ink); flex:1; }
+  .section-title { font-family:var(--f-display); font-size:16.5px; font-weight:700; color:var(--ink); flex:1; letter-spacing:-.02em; }
   .recnote{ font-size:12.5px; color:var(--soft); margin-bottom:12px; display:none; }
 
   /* 카드 — 비즈니스 톤 (흰 카드 + 얇은 색 띠) */
@@ -171,7 +235,7 @@
   .ai-card.st-work .p-badge,.ai-card.st-think .p-badge{ animation:botwork 1.6s ease-in-out infinite; }
   .ai-card:not(.selected) .p-badge{ filter:grayscale(.55); opacity:.7; }
   .cbody{ padding:11px 13px 13px; }
-  .cname{ font-size:13.5px; font-weight:800; }
+  .cname{ font-family:var(--f-data); font-size:12.5px; font-weight:600; letter-spacing:-.01em; }
   .crole{ font-size:11.5px; color:var(--soft); margin-top:1px; line-height:1.35; }
   .crow{ display:flex; align-items:center; justify-content:space-between; margin-top:9px; gap:6px; }
   .cstate{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--soft); }
@@ -258,7 +322,7 @@
   /* ══════ SCREEN 3 — 브레인 AI ══════ */
   #screen3 .main-content { background:var(--bg); }
   .brain-header { display:flex; align-items:center; margin-bottom:18px; gap:12px; }
-  .brain-title { font-size:26px; font-weight:800; flex:1; display:flex; align-items:center; gap:8px; }
+  .brain-title { font-family:var(--f-display); font-size:25px; font-weight:700; letter-spacing:-.03em; flex:1; display:flex; align-items:center; gap:8px; }
   .brain-card { background:linear-gradient(135deg,#7c3aed 0%,#a855f7 50%,#6d28d9 100%); border-radius:20px;
     padding:22px 24px; margin-bottom:26px; display:flex; align-items:stretch; gap:16px; min-height:158px; }
   .brain-card-left { flex:1; display:flex; flex-direction:column; gap:16px; }
@@ -298,7 +362,7 @@
   .stat-cards{ display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:22px; }
   @media(max-width:900px){ .stat-cards{ grid-template-columns:repeat(2,1fr);} }
   .stat-cards .c{ background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px 12px; text-align:center; }
-  .stat-cards .c .v{ font-size:25px; font-weight:800; color:var(--purple); }
+  .stat-cards .c .v{ font-family:var(--f-data); font-variant-numeric:tabular-nums; font-size:24px; font-weight:600; color:var(--purple); }
   .stat-cards .c .l{ font-size:11px; color:var(--soft); margin-top:3px; }
   .dash-table{ width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:16px; overflow:hidden; }
   .dash-table th,.dash-table td{ padding:11px 13px; font-size:13px; text-align:left; border-bottom:1px solid var(--line); }
@@ -427,12 +491,22 @@
   </nav>
   <div class="hero-body">
     <div class="hero-left">
-      <h1 class="hero-headline">AI 직원을 고용하세요.<br>잠들지 않는 당신의 팀,<br>넥스타</h1>
-      <p class="hero-sub">업무를 한국어로 말하면, AI 직원 '비비' 13명이 각자 조사·작성하고 총괄 비비가 검수해 보고서로 올립니다.</p>
+      <h1 class="hero-headline">당신이 잠든 사이에도<br><em>비비는 계속 일합니다</em></h1>
+      <p class="hero-sub">업무를 한국어로 한 줄 적으면, AI 직원 비비 12명이 각자 조사하고 작성합니다.
+        총괄 비비가 검수해 하나의 보고서로 올려요.</p>
       <div class="hero-pts">
         <div>✅ 실제 웹 조사</div><div>🛡️ 총괄 비비 검수</div><div>💳 결과 나올 때만 차감</div>
       </div>
       <button class="btn-pill" style="font-size:15px;padding:13px 28px;" onclick="enterApp()">넥스타 시작하기</button>
+    </div>
+
+    <div class="shiftboard" aria-label="비비 근무 현황">
+      <div class="shiftboard-head">
+        <b>근무 현황</b>
+        <span class="shiftboard-clock" id="shiftClock">--:--</span>
+      </div>
+      <div id="shiftRows"></div>
+      <div class="shiftboard-foot">교대 없음 · 연중무휴</div>
     </div>
   </div>
   <div class="landing-legal">
@@ -699,6 +773,7 @@
     </div>
     <p style="font-size:13px;color:var(--soft);margin-bottom:20px;">상품 정보만 넣으면 인스타그램용 카드뉴스 3장(후킹·정보·CTA)을 자동으로 만들어드려요. 완성되면 다운로드해서 바로 게시하실 수 있어요.</p>
 
+    <div class="t-label" style="margin:4px 0 12px;">매일 하는 일</div>
     <div class="cn-auto-box">
       <div class="section-title">🔖 쿠팡 상품 자동 가져오기 + 자동 업로드</div>
       <p style="font-size:12.5px;color:var(--soft);margin:4px 0 10px;">
@@ -739,36 +814,6 @@
         <div class="cn-cost">문구 <b id="cnAutoCostShow">3</b>개 × <b>30</b>크레딧 = <b id="cnAutoCostTotal">90</b> 크레딧 차감돼요. 생성되는 즉시 인스타그램에 자동 게시됩니다.<br>보관함에 담으면 지금은 차감되지 않고, 아래 예약 시각에 하나씩 자동 발행됩니다.</div>
       </div>
       <div id="cnAutoProgress" style="display:none;margin-top:14px;"></div>
-    </div>
-
-    <!-- ══ 틱톡 연동 ══ -->
-    <div class="cn-card" style="margin-top:16px;">
-      <div class="cn-step">🎵 틱톡으로도 올리기</div>
-      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
-        만든 카드뉴스를 틱톡 <b>초안함</b>으로 보냅니다. 틱톡 앱에서 확인하고 올리시면 돼요 —
-        심사가 필요 없어서 지금 바로 쓸 수 있고, AI가 만든 게 검토 없이 올라가지 않아 안전합니다.
-      </p>
-      <div id="ttBox"></div>
-    </div>
-
-    <!-- ══ 유튜브 숏츠 ══ -->
-    <div class="cn-card" style="margin-top:16px;">
-      <div class="cn-step">▶️ 유튜브 숏츠로 만들기</div>
-      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
-        카드뉴스를 <b>세로 영상(9:16)</b>으로 만들어 유튜브에 올려요. 심사 전에는 유튜브가 API 업로드를
-        자동으로 비공개 처리하므로 <b>비공개로 올린 뒤</b> 스튜디오에서 확인하고 공개하시면 됩니다.
-      </p>
-      <div id="ytBox"></div>
-    </div>
-
-    <!-- ══ 워드프레스 블로그 ══ -->
-    <div class="cn-card" style="margin-top:16px;">
-      <div class="cn-step">📝 블로그 글 자동 작성</div>
-      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
-        주제만 적으면 SEO 비비가 검색에 걸리는 글을 써서 워드프레스에 올려요.
-        기본은 <b>초안</b>으로 올라가니 확인하고 발행하시면 됩니다.
-      </p>
-      <div id="wpBox"></div>
     </div>
 
     <!-- ══ 자동 발행 예약 ══ -->
@@ -822,6 +867,38 @@
       <div class="cn-result">
         <div id="cnSlides" class="cn-slides"><div class="cn-empty">아직 만든 카드뉴스가 없어요.<br>왼쪽에서 상품 정보를 넣고 생성해보세요.</div></div>
       </div>
+    </div>
+
+
+    <div class="t-label" style="margin:26px 0 12px;">어디에 올릴까요</div>
+    <div class="channel-grid">
+    <!-- ══ 틱톡 연동 ══ -->
+    <div class="cn-card" style="margin-top:16px;">
+      <div class="cn-step">🎵 틱톡으로도 올리기</div>
+      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
+        카드뉴스를 틱톡 <b>초안함</b>으로 보냅니다. 앱에서 확인하고 올리면 끝이에요.
+      </p>
+      <div id="ttBox"></div>
+    </div>
+
+    <!-- ══ 유튜브 숏츠 ══ -->
+    <div class="cn-card" style="margin-top:16px;">
+      <div class="cn-step">▶️ 유튜브 숏츠로 만들기</div>
+      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
+        카드뉴스를 <b>세로 영상(9:16)</b>으로 만들어 올려요. <b>비공개로</b> 올라가니 스튜디오에서 확인 후 공개하세요.
+      </p>
+      <div id="ytBox"></div>
+    </div>
+
+    <!-- ══ 워드프레스 블로그 ══ -->
+    <div class="cn-card" style="grid-column:1/-1;">
+      <div class="cn-step">📝 블로그 글 자동 작성</div>
+      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
+        주제만 적으면 SEO 비비가 글을 써서 올려요. 기본은 <b>초안</b>이라 확인 후 발행하시면 됩니다.
+      </p>
+      <div id="wpBox"></div>
+    </div>
+
     </div>
 
     <div class="cn-histhead"><div class="section-title">최근 생성 내역</div></div>
@@ -964,6 +1041,43 @@ var CREW = [
 ];
 CREW.forEach(function(p, idx){ p.serial = ('0' + (idx+1)).slice(-2); });
 var GRID_CREW = CREW.filter(function(p){ return p.name !== '총괄AI'; });
+
+/* ══════ 근무 현황판 (랜딩) ══════
+   히어로에서 "이미 일하고 있다"를 보여주는 자리. 6명만 띄운다 — 12명을 다 세우면
+   표가 길어져 헤드라인과 무게를 다투고, 요점은 명부가 아니라 '가동 중'이라는 사실이다. */
+(function(){
+  var rowsEl = document.getElementById('shiftRows');
+  var clockEl = document.getElementById('shiftClock');
+  if(!rowsEl || !clockEl) return;
+
+  var shown = GRID_CREW.slice(0, 6);
+  var working = [0, 2, 4]; // 처음에 '작업 중'으로 보일 자리
+
+  function tick(){
+    var d = new Date();
+    clockEl.textContent = ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2) + ' KST';
+  }
+  function render(justIdx){
+    rowsEl.innerHTML = shown.map(function(p, i){
+      var on = working.indexOf(i) >= 0;
+      return '<div class="shiftrow">'
+        + '<span class="id">' + p.serial + '</span>'
+        + '<span class="who">' + esc(p.role) + '</span>'
+        + '<span class="st ' + (on ? 'on' : 'done') + (i === justIdx ? ' just' : '') + '">'
+        +   (on ? '작업 중' : '대기') + '</span></div>';
+    }).join('');
+  }
+
+  tick(); render();
+  setInterval(tick, 30000);
+  // 한 명씩 상태를 바꿔 '돌아가고 있다'는 것만 알린다. 계속 깜빡이면 읽기를 방해한다.
+  setInterval(function(){
+    var i = Math.floor(Math.random() * shown.length);
+    var at = working.indexOf(i);
+    if(at >= 0) working.splice(at, 1); else working.push(i);
+    render(i);
+  }, 3800);
+})();
 var PICKABLE = ['전략기획','재무분석','SEO','고객문의','영업관리','채용','SNS콘텐츠','카피라이터','이메일','성장코치','이커머스','비서'];
 var BRAND_KEY = '브랜드가이드';
 
