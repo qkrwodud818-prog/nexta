@@ -2328,6 +2328,183 @@ app.post("/api/social/youtube/short", async (req, res) => {
   }
 });
 
+/* ══════════════════════════════════════════════════════════════
+   3-6) 워드프레스 블로그 — AI가 글을 써서 자동 발행
+   OAuth가 없는 대신 "애플리케이션 비밀번호"(WP 5.6+ 기본 기능)를 쓴다. 사용자가 자기
+   관리자 화면에서 발급하는 값이라 계정 비밀번호가 아니고, 언제든 회수할 수 있다.
+
+   ⚠️ 이 기능은 사용자가 넣은 주소로 서버가 직접 요청을 보낸다. 그대로 두면 내부망
+   주소(localhost, 사설 IP, 클라우드 메타데이터 서버)를 넣어 우리 서버를 공격 도구로
+   쓸 수 있으므로(SSRF), 요청 전에 주소를 반드시 검사한다.
+   ══════════════════════════════════════════════════════════════ */
+const COST_BLOG = 30; // 블로그 글 1편 생성 시 차감 크레딧
+
+/** 사설/내부 대역 여부. IPv4·IPv6 모두 본다. */
+function isPrivateAddress(host) {
+  const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
+  if (!h || h === "localhost" || h.endsWith(".localhost") || h.endsWith(".internal") || h.endsWith(".local")) return true;
+  if (h === "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:")) return true; // IPv6 루프백/ULA/링크로컬
+
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false; // 도메인이면 아래 DNS 확인 단계에서 다시 걸러진다
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  if ([0, 10, 127].includes(a)) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true; // 클라우드 메타데이터(169.254.169.254) 포함
+  if (a >= 224) return true;               // 멀티캐스트/예약
+  return false;
+}
+
+/** 워드프레스 주소 검증 — https만, 내부망 금지, DNS가 사설 IP로 향하는 경우도 차단. */
+async function assertSafeWordpressUrl(raw) {
+  let url;
+  try { url = new URL(raw); } catch { throw new Error("사이트 주소 형식이 올바르지 않습니다."); }
+  if (url.protocol !== "https:") throw new Error("보안을 위해 https 주소만 연결할 수 있습니다.");
+  if (isPrivateAddress(url.hostname)) throw new Error("내부망 주소는 연결할 수 없습니다.");
+
+  // 도메인이 사설 IP를 가리키는 경우(DNS 리바인딩)도 막는다.
+  const { lookup } = require("dns").promises;
+  let addrs;
+  try { addrs = await lookup(url.hostname, { all: true }); }
+  catch { throw new Error("사이트 주소를 찾을 수 없습니다."); }
+  if (!addrs.length || addrs.some((a) => isPrivateAddress(a.address))) {
+    throw new Error("내부망 주소는 연결할 수 없습니다.");
+  }
+  return url.origin;
+}
+
+function wpAuthHeader(username, appPassword) {
+  // 애플리케이션 비밀번호는 화면에 공백이 섞여 표시된다 — 붙여넣기 그대로 받아 공백만 제거한다.
+  return "Basic " + Buffer.from(username + ":" + String(appPassword).replace(/\s+/g, "")).toString("base64");
+}
+
+async function wpRequest(site, pathname, options = {}) {
+  const resp = await fetch(site.siteUrl + pathname, {
+    ...options,
+    headers: {
+      Authorization: wpAuthHeader(site.username, decryptSecret(site.appPasswordEnc)),
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    signal: AbortSignal.timeout(20000),
+  });
+  const text = await resp.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error("워드프레스 응답을 해석하지 못했습니다. REST API가 켜져 있는지 확인해 주세요."); }
+  if (!resp.ok) throw new Error(data.message || `워드프레스 오류 (${resp.status})`);
+  return data;
+}
+
+const 블로그작성지시 = (topic, product) => `
+당신은 한국의 소상공인을 위해 검색에 잘 걸리는 블로그 글을 쓰는 SEO 담당자입니다.
+
+주제: ${topic}
+${product ? `관련 상품: ${product}` : ""}
+
+아래 JSON 형식으로만 답하세요. JSON 외의 텍스트는 쓰지 마세요.
+{
+  "title": "검색에 걸릴 만한 제목 (30자 내외)",
+  "excerpt": "요약 한 줄 (80자 내외)",
+  "content": "본문 HTML",
+  "tags": ["태그1", "태그2", "태그3"]
+}
+
+본문 작성 규칙:
+- <h2>, <h3>, <p>, <ul>, <li>, <strong>만 사용하세요. 다른 태그나 script는 절대 쓰지 마세요.
+- 1200자 내외. 소제목으로 3~4개 구획을 나눕니다.
+- 첫 문단에서 독자의 고민을 짚고, 이 글이 무엇을 해결해 주는지 밝힙니다.
+- 확실하지 않은 수치나 사실은 지어내지 말고, 일반론으로 쓰거나 생략하세요.
+- 광고처럼 과장하지 말고, 실제로 도움이 되는 정보를 담습니다.`;
+
+app.get("/api/social/wordpress/status", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const site = db.getWordpressSite(u.id);
+  res.json({
+    connected: !!site,
+    siteUrl: site?.siteUrl || null,
+    displayName: site?.displayName || null,
+    lastError: site?.lastError || null,
+    cost: COST_BLOG,
+  });
+});
+
+app.post("/api/social/wordpress/connect", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const b = req.body || {};
+  const username = String(b.username || "").trim().slice(0, 60);
+  const appPassword = String(b.appPassword || "").trim();
+  if (!username || !appPassword) return res.status(400).json({ error: "아이디와 애플리케이션 비밀번호를 모두 입력해 주세요." });
+
+  try {
+    const origin = await assertSafeWordpressUrl(String(b.siteUrl || "").trim());
+    const probe = { siteUrl: origin, username, appPasswordEnc: encryptSecret(appPassword) };
+    // 저장 전에 실제로 글쓰기 권한이 있는 계정인지 확인한다(context=edit는 권한이 있어야 통과).
+    const me = await wpRequest(probe, "/wp-json/wp/v2/users/me?context=edit");
+    db.upsertWordpressSite(u.id, { ...probe, displayName: me.name || me.slug || null });
+    res.json({ ok: true, displayName: me.name || null, siteUrl: origin });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post("/api/social/wordpress/disconnect", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  db.deleteWordpressSite(u.id);
+  res.json({ ok: true });
+});
+
+/** 주제를 주면 AI가 글을 쓰고 워드프레스에 올린다. 기본은 초안(draft) — 확인 후 발행하도록. */
+app.post("/api/social/wordpress/post", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) {
+    return res.status(402).json({ error: "결제 후 30일 이용 기간이 지났습니다. 다시 결제해 주세요.", accessUntil: u.accessUntil });
+  }
+
+  const site = db.getWordpressSite(u.id);
+  if (!site) return res.status(400).json({ error: "먼저 워드프레스를 연결해 주세요." });
+
+  const topic = String((req.body && req.body.topic) || "").trim().slice(0, 200);
+  if (!topic) return res.status(400).json({ error: "어떤 주제로 쓸지 적어 주세요." });
+  const status = req.body && req.body.publish === true ? "publish" : "draft";
+
+  if ((u.credits || 0) < COST_BLOG) {
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다.", need: COST_BLOG, have: u.credits || 0 });
+  }
+
+  try {
+    const config = loadModelConfig();
+    const result = await callWithFallback(
+      config, "전문_SEO", 블로그작성지시(topic, req.body && req.body.product), false, 2600,
+      { userId: u.id, jobId: "wp_" + Date.now().toString(36) },
+    );
+    const parsed = parseJSON(result.text);
+    if (!parsed || !parsed.title || !parsed.content) throw new Error("글 생성에 실패했습니다. 주제를 조금 더 구체적으로 적어 주세요.");
+
+    const post = await wpRequest(site, "/wp-json/wp/v2/posts", {
+      method: "POST",
+      body: JSON.stringify({
+        title: String(parsed.title).slice(0, 200),
+        content: String(parsed.content),
+        excerpt: String(parsed.excerpt || "").slice(0, 300),
+        status,
+      }),
+    });
+
+    // 실제로 글이 올라간 뒤에만 차감한다 (중간에 실패하면 크레딧을 받지 않는다).
+    chargeUser(u.id, COST_BLOG, { kind: "블로그 글", label: String(parsed.title).slice(0, 60) });
+    res.json({ ok: true, id: post.id, link: post.link, status, title: parsed.title });
+  } catch (e) {
+    db.markWordpressError(u.id, e.message);
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // 4) 메타 웹훅 — 댓글에 키워드 남기면 자동으로 비공개 답장(DM) 발송 (매니챗 대체, 무료·무제한)
 const IG_WEBHOOK_VERIFY_TOKEN = process.env.IG_WEBHOOK_VERIFY_TOKEN || "nexta-verify";
 // META_APP_SECRET(메타 개발자 앱의 "앱 시크릿") — 이 웹훅이 정말 메타에서 온 요청인지 서명을

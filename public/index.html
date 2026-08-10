@@ -690,6 +690,16 @@
       <div id="ytBox"></div>
     </div>
 
+    <!-- ══ 워드프레스 블로그 ══ -->
+    <div class="cn-card" style="margin-top:16px;">
+      <div class="cn-step">📝 블로그 글 자동 작성</div>
+      <p style="font-size:13px;color:var(--soft);margin:6px 0 12px;">
+        주제만 적으면 SEO 비비가 검색에 걸리는 글을 써서 워드프레스에 올려요.
+        기본은 <b>초안</b>으로 올라가니 확인하고 발행하시면 됩니다.
+      </p>
+      <div id="wpBox"></div>
+    </div>
+
     <!-- ══ 자동 발행 예약 ══ -->
     <div class="cn-card" style="margin-top:16px;">
       <div class="cn-step">😴 자면서 벌기 — 자동 발행 예약</div>
@@ -900,7 +910,7 @@ function goTo(id){
   document.getElementById(id).classList.add('active');
   if(id === 'screen4') renderDashboard();
   if(id === 'screen3') loadKnowledgeList();
-  if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); loadTiktok(); loadYoutube(); }
+  if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); loadTiktok(); loadYoutube(); loadWordpress(); }
   if(id === 'screen6') loadRevenue();
 }
 function enterApp(){
@@ -1868,6 +1878,75 @@ document.getElementById('revAddBtn').onclick = function(){
   })
   .finally(function(){ b.disabled=false; });
 };
+
+/* ══════ 워드프레스 블로그 ══════ */
+function loadWordpress(){
+  fetch('/api/social/wordpress/status').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+    if(!d) return;
+    var box = document.getElementById('wpBox');
+    if(d.connected){
+      box.innerHTML = '<div style="font-size:13px;color:var(--green);font-weight:600;margin-bottom:6px;">✅ 연결됨 — '
+        + esc(d.siteUrl) + (d.displayName ? ' (' + esc(d.displayName) + ')' : '') + '</div>'
+        + (d.lastError ? '<div class="err" style="margin-bottom:10px;">최근 오류: '+esc(d.lastError)+'</div>' : '')
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">'
+        +   '<input id="wpTopic" placeholder="어떤 주제로 쓸까요? 예) 캠핑 의자 고르는 법" style="flex:1;min-width:220px;padding:9px;border-radius:8px;border:1px solid var(--line);">'
+        +   '<button class="btn-sm pri" id="wpWriteBtn">글 쓰기</button>'
+        + '</div>'
+        + '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--soft);cursor:pointer;">'
+        +   '<input type="checkbox" id="wpPublishNow" style="width:auto;margin:0;"> 초안 대신 바로 발행하기</label>'
+        + '<div class="cn-cost">글 1편당 <b>' + d.cost + '</b> 크레딧이 차감돼요. 발행에 실패하면 차감되지 않습니다.</div>'
+        + '<div id="wpResult" style="font-size:13px;margin-top:8px;"></div>'
+        + '<button class="btn-sm" id="wpDisconnect" style="margin-top:10px;">연결 해제</button>';
+
+      document.getElementById('wpWriteBtn').onclick = function(){
+        var topic = document.getElementById('wpTopic').value.trim();
+        var out = document.getElementById('wpResult');
+        if(!topic){ out.innerHTML = '<span class="err">주제를 적어 주세요.</span>'; return; }
+        var b = this; b.disabled = true; b.textContent = '쓰는 중...';
+        out.innerHTML = 'SEO 비비가 글을 쓰고 있어요...';
+        fetch('/api/social/wordpress/post',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ topic:topic, publish: document.getElementById('wpPublishNow').checked })})
+        .then(function(r){ return r.json().then(function(x){ return {ok:r.ok, d:x}; }); })
+        .then(function(res){
+          if(!res.ok){ out.innerHTML = '<span class="err">'+esc(res.d.error||'실패')+'</span>'; return; }
+          out.innerHTML = '✅ <b>'+esc(res.d.title)+'</b> — '
+            + (res.d.status==='publish' ? '발행됨' : '초안으로 저장됨')
+            + ' · <a href="'+esc(res.d.link)+'" target="_blank" rel="noopener" style="color:var(--purple);">열어보기</a>';
+          document.getElementById('wpTopic').value = '';
+          fetch('/api/me').then(function(r){ return r.json(); }).then(function(m){ if(m.user){ me = m.user; renderCredits(me); } });
+        })
+        .finally(function(){ b.disabled = false; b.textContent = '글 쓰기'; });
+      };
+      document.getElementById('wpDisconnect').onclick = function(){
+        if(!confirm('워드프레스 연결을 해제할까요?')) return;
+        fetch('/api/social/wordpress/disconnect',{method:'POST'}).then(function(){ loadWordpress(); });
+      };
+    } else {
+      box.innerHTML = '<p style="font-size:12.5px;color:var(--soft);margin:0 0 10px;">'
+        + '워드프레스 관리자 → 사용자 → 프로필 맨 아래 <b>애플리케이션 비밀번호</b>에서 새로 발급받아 넣어 주세요. '
+        + '계정 비밀번호가 아니라 언제든 회수할 수 있는 전용 값입니다.</p>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+        + '<input id="wpUrl" placeholder="https://내블로그.com" style="flex:1;min-width:200px;padding:9px;border-radius:8px;border:1px solid var(--line);">'
+        + '<input id="wpUser" placeholder="워드프레스 아이디" style="width:160px;padding:9px;border-radius:8px;border:1px solid var(--line);">'
+        + '<input id="wpPass" type="password" placeholder="애플리케이션 비밀번호" style="width:200px;padding:9px;border-radius:8px;border:1px solid var(--line);">'
+        + '<button class="btn-sm pri" id="wpConnect">연결</button></div>'
+        + '<div id="wpConnectMsg" style="font-size:12.5px;margin-top:8px;"></div>';
+      document.getElementById('wpConnect').onclick = function(){
+        var b=this, msg=document.getElementById('wpConnectMsg');
+        b.disabled=true; msg.innerHTML='확인 중...';
+        fetch('/api/social/wordpress/connect',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ siteUrl:document.getElementById('wpUrl').value.trim(),
+                                username:document.getElementById('wpUser').value.trim(),
+                                appPassword:document.getElementById('wpPass').value })})
+        .then(function(r){ return r.json().then(function(x){ return {ok:r.ok,d:x}; }); })
+        .then(function(res){
+          if(!res.ok){ msg.innerHTML='<span class="err">'+esc(res.d.error||'연결 실패')+'</span>'; b.disabled=false; return; }
+          celebrate('📝 워드프레스가 연결됐어요!'); loadWordpress();
+        });
+      };
+    }
+  }).catch(function(){});
+}
 
 /* ══════ 유튜브 숏츠 ══════ */
 var youtubeConnected = false;

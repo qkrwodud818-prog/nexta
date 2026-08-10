@@ -268,6 +268,24 @@ db.exec(`
   );
 `);
 
+/* ────────────────────────── 워드프레스 연동 ──────────────────────────
+ * 워드프레스는 OAuth 대신 "애플리케이션 비밀번호"(WP 5.6+ 기본 기능)를 쓴다. 사용자가
+ * 자기 관리자 화면에서 발급한 값이라 계정 비밀번호가 아니고, 언제든 회수할 수 있다.
+ * 그래도 글 작성 권한 그 자체이므로 다른 토큰들과 같이 암호화해서 넣는다.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS wordpress_sites (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    site_url TEXT NOT NULL,
+    username TEXT NOT NULL,
+    app_password_enc TEXT NOT NULL,
+    display_name TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
+
 /* ────────────────────────── 유튜브 연동 ──────────────────────────
  * 구글 OAuth는 refresh_token을 최초 동의 때 한 번만 내려주므로(access_type=offline +
  * prompt=consent), 재연결 시 새 값이 안 오면 기존 값을 지우지 않고 유지해야 한다.
@@ -1071,7 +1089,41 @@ function markYoutubeError(userId, error) {
     .run(error ? String(error).slice(0, 300) : null, new Date().toISOString(), userId);
 }
 
+/* ────────────────────────── 워드프레스 연동 ────────────────────────── */
+
+function getWordpressSite(userId) {
+  const row = db.prepare("SELECT * FROM wordpress_sites WHERE user_id = ?").get(userId);
+  if (!row) return null;
+  return {
+    userId: row.user_id, siteUrl: row.site_url, username: row.username,
+    appPasswordEnc: row.app_password_enc, displayName: row.display_name,
+    lastError: row.last_error || null,
+  };
+}
+function upsertWordpressSite(userId, s) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO wordpress_sites (user_id, site_url, username, app_password_enc, display_name, last_error, created_at, updated_at)
+     VALUES (@userId, @siteUrl, @username, @appPasswordEnc, @displayName, NULL, @now, @now)
+     ON CONFLICT(user_id) DO UPDATE SET
+       site_url = excluded.site_url, username = excluded.username,
+       app_password_enc = excluded.app_password_enc, display_name = excluded.display_name,
+       last_error = NULL, updated_at = excluded.updated_at`
+  ).run({
+    userId, siteUrl: s.siteUrl, username: s.username,
+    appPasswordEnc: s.appPasswordEnc, displayName: s.displayName || null, now,
+  });
+}
+function deleteWordpressSite(userId) {
+  db.prepare("DELETE FROM wordpress_sites WHERE user_id = ?").run(userId);
+}
+function markWordpressError(userId, error) {
+  db.prepare("UPDATE wordpress_sites SET last_error = ?, updated_at = ? WHERE user_id = ?")
+    .run(error ? String(error).slice(0, 300) : null, new Date().toISOString(), userId);
+}
+
 module.exports = {
+  getWordpressSite, upsertWordpressSite, deleteWordpressSite, markWordpressError,
   getYoutubeAccount, upsertYoutubeAccount, deleteYoutubeAccount, markYoutubeError,
   getTiktokAccount, upsertTiktokAccount, deleteTiktokAccount, markTiktokError,
   upsertRevenue, upsertRevenueMany, deleteRevenue, listRevenue, getRevenueTotal,
