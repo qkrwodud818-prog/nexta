@@ -569,6 +569,56 @@
   </div>
 </div>
 
+<!-- ══════ SCREEN 7 — 숏폼 영상 ══════ -->
+<div id="screen7" class="screen app-layout">
+  <aside class="sidebar" data-sb="video"></aside>
+  <div class="main-content">
+    <div class="brain-header">
+      <div class="brain-title">숏폼 영상 🎬</div>
+      <button class="btn-sm" onclick="goTo('screen2')">← 홈</button>
+    </div>
+    <p style="font-size:13px;color:var(--soft);margin-bottom:20px;">
+      상품 정보를 넣으면 비비가 <b>어떤 형식의 영상이 맞는지 먼저 판단</b>하고, 그에 맞는 영상 서비스로 보내 만들어요.
+      판단만 해보는 건 크레딧이 들지 않습니다.
+    </p>
+
+    <div class="cn-card" style="margin-bottom:16px;">
+      <div class="cn-step">📦 상품 정보</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+        <input id="vidName" placeholder="상품명 (예: 무선 핸디 청소기)" style="padding:9px;border-radius:8px;border:1px solid var(--line);">
+        <input id="vidFeatures" placeholder="특징 (예: 300g 초경량, 2시간 연속 사용)" style="padding:9px;border-radius:8px;border:1px solid var(--line);">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input id="vidPrice" type="number" placeholder="가격(원)" style="width:130px;padding:9px;border-radius:8px;border:1px solid var(--line);">
+          <input id="vidBiz" placeholder="업종 (예: 이커머스, 세무, 카페)" style="flex:1;min-width:160px;padding:9px;border-radius:8px;border:1px solid var(--line);">
+          <select id="vidDuration" style="padding:9px;border-radius:8px;border:1px solid var(--line);">
+            <option value="10">10초</option><option value="15" selected>15초</option>
+            <option value="30">30초</option><option value="60">60초</option>
+          </select>
+        </div>
+        <input id="vidIntent" placeholder="의도 (선택 — 예: 신상품 런칭, 이벤트 오픈)" style="padding:9px;border-radius:8px;border:1px solid var(--line);">
+        <input id="vidSource" placeholder="보유 영상 주소 (선택 — 있으면 이 영상을 잘라 재활용해요)" style="padding:9px;border-radius:8px;border:1px solid var(--line);">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+        <button class="btn-sm" id="vidClassifyBtn" style="flex:1;min-width:170px;padding:11px;">🔍 어떤 영상이 맞을지 보기</button>
+        <button class="cn-genbtn" id="vidGenerateBtn" style="flex:1;min-width:170px;margin:0;">🎬 영상 만들기</button>
+      </div>
+      <div id="vidDecision" style="margin-top:12px;"></div>
+      <div id="vidResult" style="margin-top:12px;"></div>
+    </div>
+
+    <div class="cn-card" style="margin-bottom:16px;">
+      <div class="cn-step">🔌 연결된 영상 서비스</div>
+      <div id="vidServices" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="section-header"><div class="section-title">서비스별 성적표</div></div>
+    <table class="dash-table">
+      <thead><tr><th>서비스</th><th>시도</th><th>성공률</th><th>평균 시간</th><th>누적 비용</th></tr></thead>
+      <tbody id="vidStats"><tr><td colspan="5" style="color:var(--soft);text-align:center;">아직 기록이 없어요.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ══════ SCREEN 6 — 수익 현황 ══════ -->
 <div id="screen6" class="screen app-layout">
   <aside class="sidebar" data-sb="revenue"></aside>
@@ -912,6 +962,7 @@ function goTo(id){
   if(id === 'screen3') loadKnowledgeList();
   if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); loadTiktok(); loadYoutube(); loadWordpress(); }
   if(id === 'screen6') loadRevenue();
+  if(id === 'screen7') loadVideoStatus();
 }
 function enterApp(){
   if(me){ goTo('screen2'); } else { document.getElementById('authOverlay').classList.add('show'); }
@@ -927,7 +978,8 @@ var SB_ICONS = {
   cardnews:'<path d="M4 4h16v14H7l-3 3V4z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="9.5" r="1.6"/><path d="M8 15l3-3 2.5 2.5L17 10l3 3v3H8z"/>',
   gear:'<path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>',
   back:'<path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>',
-  money:'<path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/>'
+  money:'<path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/>',
+  video:'<path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/>'
 };
 function ic(name,size){ return '<svg width="'+(size||20)+'" height="'+(size||20)+'" viewBox="0 0 24 24" fill="currentColor">'+SB_ICONS[name]+'</svg>'; }
 function buildSidebars(){
@@ -942,6 +994,7 @@ function buildSidebars(){
       +   '<div class="sb-icon' + (cur==='stats'?' active':'') + '" data-go="screen4" title="업무 현황">' + ic('list') + '</div>'
       +   '<div class="sb-icon' + (cur==='brain'?' active':'') + '" data-go="screen3" title="브레인 AI">' + ic('brain') + '</div>'
       +   '<div class="sb-icon' + (cur==='cardnews'?' active':'') + '" data-go="screen5" title="카드뉴스 자동생성">' + ic('cardnews') + '<span class="sb-badge on" style="background:var(--green);">N</span></div>'
+      +   '<div class="sb-icon' + (cur==='video'?' active':'') + '" data-go="screen7" title="숏폼 영상">' + ic('video') + '</div>'
       +   '<div class="sb-icon' + (cur==='revenue'?' active':'') + '" data-go="screen6" title="수익 현황">' + ic('money') + '</div>'
       +   '<div class="sb-icon" data-act="feed" title="진행 과정">' + ic('chat') + '<span class="sb-badge"></span></div>'
       + '</div>'
@@ -1768,6 +1821,104 @@ document.getElementById('cnPromoToggle').addEventListener('change', function(){
   .then(function(r){ return r.json(); })
   .then(function(d){ if(d.user){ me = d.user; } });
 });
+/* ══════ 숏폼 영상 ══════ */
+var VID_CATEGORY_LABEL = {
+  PRESENTER: '사람이 설명하는 영상',
+  MOOD: '분위기 중심 무드 영상',
+  TRUST_EXPLAINER: '신뢰감 있는 설명 영상',
+  REPURPOSE: '보유 영상 재활용',
+  LAUNCH_IMPACT: '런칭·이벤트 임팩트 영상'
+};
+
+function vidPayload(){
+  return {
+    productName: document.getElementById('vidName').value.trim(),
+    productFeatures: document.getElementById('vidFeatures').value.trim(),
+    price: Number(document.getElementById('vidPrice').value) || undefined,
+    businessCategory: document.getElementById('vidBiz').value.trim(),
+    userIntent: document.getElementById('vidIntent').value.trim(),
+    sourceVideoUrl: document.getElementById('vidSource').value.trim() || undefined,
+    durationSec: parseInt(document.getElementById('vidDuration').value, 10)
+  };
+}
+function renderDecision(d){
+  var box = document.getElementById('vidDecision');
+  var q = d.quote;
+  var quoteLine = q
+    ? (q.credits != null
+        ? '<b>' + q.label + '</b>로 만들면 <b>' + q.credits + ' 크레딧</b>이 들어요.'
+        : '<span class="err">' + esc(q.label) + '는 단가가 정해지지 않아 아직 만들 수 없어요.</span>')
+    : '<span class="err">이 유형에 쓸 수 있는 서비스가 연결되어 있지 않아요.</span>';
+
+  box.innerHTML = '<div style="padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);">'
+    + '<div style="font-size:14px;font-weight:700;margin-bottom:4px;">' + esc(VID_CATEGORY_LABEL[d.category] || d.category) + '</div>'
+    + '<div style="font-size:12.5px;color:var(--soft);margin-bottom:8px;">' + esc(d.reasoning || '')
+    +   ' · 확신 ' + Math.round((d.confidence||0)*100) + '%'
+    +   (d.decidedBy === 'rule' ? ' (확정 규칙)' : d.decidedBy === 'llm' ? ' (비비 판단)' : ' (기본값)') + '</div>'
+    + '<div style="font-size:13px;">' + quoteLine + '</div></div>';
+}
+document.getElementById('vidClassifyBtn').onclick = function(){
+  var p = vidPayload();
+  if(!p.productName){ alert('상품명을 적어 주세요.'); return; }
+  var b=this; b.disabled=true; b.textContent='판단 중...';
+  fetch('/api/video/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)})
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,d:d}; }); })
+  .then(function(res){
+    if(!res.ok){ alert(res.d.error||'판단하지 못했습니다.'); return; }
+    renderDecision(res.d);
+  })
+  .finally(function(){ b.disabled=false; b.textContent='🔍 어떤 영상이 맞을지 보기'; });
+};
+document.getElementById('vidGenerateBtn').onclick = function(){
+  var p = vidPayload();
+  if(!p.productName){ alert('상품명을 적어 주세요.'); return; }
+  var out = document.getElementById('vidResult');
+  var b=this; b.disabled=true; b.textContent='만드는 중... (최대 5분)';
+  out.innerHTML = '<div style="font-size:13px;color:var(--soft);">비비가 영상을 만들고 있어요. 창을 닫지 말아 주세요.</div>';
+  fetch('/api/video/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)})
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,d:d}; }); })
+  .then(function(res){
+    if(!res.ok){
+      var tried = (res.d.attempts||[]).map(function(a){
+        return '<li>' + esc(a.service) + ': ' + esc(a.error||'') + '</li>'; }).join('');
+      out.innerHTML = '<div class="err">' + esc(res.d.error||'만들지 못했습니다.') + '</div>'
+        + (tried ? '<ul style="font-size:12px;color:var(--soft);margin-top:6px;padding-left:18px;">'+tried+'</ul>' : '');
+      if(res.d.decision) renderDecision(res.d.decision);
+      return;
+    }
+    var r = res.d.result;
+    out.innerHTML = '<div style="padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);">'
+      + '<div style="font-size:13.5px;font-weight:700;margin-bottom:6px;">✅ ' + esc(r.service) + '로 만들었어요 ('+r.durationSec+'초)</div>'
+      + '<video src="'+esc(r.videoUrl)+'" controls style="width:100%;max-width:280px;border-radius:10px;"></video>'
+      + '<div style="font-size:12.5px;color:var(--soft);margin-top:6px;">'+res.d.charged+' 크레딧 차감 · 남은 크레딧 '+res.d.credits+'</div>'
+      + '<a href="'+esc(r.videoUrl)+'" target="_blank" rel="noopener" style="font-size:12.5px;color:var(--purple);font-weight:700;">새 창에서 열기</a></div>';
+    if(me){ me.credits = res.d.credits; renderCredits(me); }
+    loadVideoStatus();
+  })
+  .finally(function(){ b.disabled=false; b.textContent='🎬 영상 만들기'; });
+};
+function loadVideoStatus(){
+  fetch('/api/video/status').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+    if(!d) return;
+    document.getElementById('vidServices').innerHTML = d.services.map(function(s){
+      var badge = s.connected
+        ? (s.costPerSecUsd != null ? '<span style="color:var(--green);">연결됨</span>'
+                                   : '<span style="color:var(--amber);">연결됨 · 단가 미설정</span>')
+        : '<span style="color:var(--soft);">미연결</span>';
+      return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);">'
+        + '<div style="width:100px;font-size:13px;font-weight:600;">'+esc(s.label)+'</div>'
+        + '<div style="width:110px;font-size:12.5px;">'+badge+'</div>'
+        + '<div style="flex:1;font-size:11.5px;color:var(--soft);">'+esc(s.costNote||'')+'</div></div>';
+    }).join('');
+
+    var body = document.getElementById('vidStats');
+    body.innerHTML = d.stats.length ? d.stats.map(function(s){
+      return '<tr><td>'+esc(s.service)+'</td><td>'+s.attempts+'</td><td>'+s.successRate+'%</td>'
+        + '<td>'+(s.avgSec||'-')+'초</td><td>$'+(s.totalUsd||0)+'</td></tr>';
+    }).join('') : '<tr><td colspan="5" style="color:var(--soft);text-align:center;">아직 기록이 없어요.</td></tr>';
+  }).catch(function(){});
+}
+
 /* ══════ 수익 현황 ══════ */
 var revChannels = {};
 function won(n){ return Number(n||0).toLocaleString() + '원'; }
