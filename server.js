@@ -2517,6 +2517,12 @@ const videoPipeline = require("./social/video");
 const classifyVideo = createClassifier({ callWithFallback, parseJSON, loadModelConfig });
 
 const USD_TO_KRW = Number(process.env.USD_TO_KRW) || 1380; // 마진 계산용 환율(대략치)
+const VIDEO_TARGET_MARGIN = 0.7; // 영상 편당 요금을 역산할 때 지킬 순이익률
+
+/** 영상 요금 계산에 쓰는 기준 — 크레딧 가치는 스탠다드 요금제에서 역산한다. */
+function videoPricingBasis() {
+  return { plan: SUBSCRIPTION_PLANS.standard, usdToKrw: USD_TO_KRW, targetMargin: VIDEO_TARGET_MARGIN };
+}
 
 /** 분류만 해보기 — 외부 API 키 없이도 라우팅 판단을 검증할 수 있다(지시서 7-1). */
 app.post("/api/video/classify", async (req, res) => {
@@ -2538,10 +2544,31 @@ app.post("/api/video/classify", async (req, res) => {
   );
 
   const config = videoPipeline.loadRoutingConfig();
+  const durationSec = Math.min(60, Math.max(5, parseInt(b.durationSec, 10) || 15));
+  const available = videoPipeline.resolveRoute(config, decision.category);
   res.json({
     ...decision,
     route: config.routes[decision.category],
-    availableServices: videoPipeline.resolveRoute(config, decision.category),
+    availableServices: available,
+    // 생성 전에 얼마가 드는지 미리 보여준다 — 누르고 나서 알게 되면 안 된다.
+    quote: available.length
+      ? videoPipeline.quoteVideo(config, available[0], durationSec, videoPricingBasis())
+      : null,
+  });
+});
+
+/** 편당 요금 미리보기 — 서비스별로 얼마인지 한눈에. */
+app.get("/api/video/quote", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const config = videoPipeline.loadRoutingConfig();
+  const durationSec = Math.min(60, Math.max(5, parseInt(req.query.seconds, 10) || 15));
+  res.json({
+    durationSec,
+    credits: u.credits || 0,
+    quotes: Object.keys(config.services).map((name) =>
+      videoPipeline.quoteVideo(config, name, durationSec, videoPricingBasis()),
+    ),
   });
 });
 
@@ -2573,6 +2600,23 @@ app.post("/api/video/generate", async (req, res) => {
   const productName = String(b.productName || "").trim().slice(0, 200);
   if (!productName) return res.status(400).json({ error: "상품명이 필요합니다." });
 
+  // 영상은 외부 API가 초당 과금이라 편당 요금이 크다. 시작 전에 "가장 비싼 후보" 기준으로
+  // 잔액을 확인해 둔다 — 폴백으로 더 비싼 서비스에 갔다가 잔액이 모자라는 상황을 막기 위함.
+  const cfgForQuote = videoPipeline.loadRoutingConfig();
+  const durationSec = Math.min(60, Math.max(5, parseInt(b.durationSec, 10) || 15));
+  const maxQuote = videoPipeline
+    .readyServices(cfgForQuote)
+    .map((n) => videoPipeline.quoteVideo(cfgForQuote, n, durationSec, videoPricingBasis()))
+    .filter((q) => q && q.credits != null)
+    .reduce((max, q) => (max == null || q.credits > max.credits ? q : max), null);
+
+  if (maxQuote && (u.credits || 0) < maxQuote.credits) {
+    return res.status(402).json({
+      error: `영상 1편에 최대 ${maxQuote.credits} 크레딧이 필요한데 ${u.credits || 0} 크레딧만 남았어요.`,
+      need: maxQuote.credits, have: u.credits || 0,
+    });
+  }
+
   const result = await videoPipeline.generateVideo(
     {
       product_name: productName,
@@ -2595,8 +2639,21 @@ app.post("/api/video/generate", async (req, res) => {
     (attempt) => db.logVideoAttempt(u.id, attempt),
   );
 
-  if (!result.ok) return res.status(400).json({ error: result.error, decision: result.decision, attempts: result.attempts });
-  res.json(result);
+  if (!result.ok) {
+    // 실패하면 차감하지 않는다 — 외부 API가 돈을 먹었더라도 사용자에게는 받지 않는다.
+    return res.status(400).json({ error: result.error, decision: result.decision, attempts: result.attempts });
+  }
+
+  // 실제로 쓰인 서비스 기준으로 정산한다. 폴백으로 다른 서비스를 탔으면 그 요금이 적용된다.
+  const quote = videoPipeline.quoteVideo(
+    cfgForQuote, result.result.service, result.result.durationSec, videoPricingBasis(),
+  );
+  const charged = quote?.credits || 0;
+  const remaining = charged
+    ? chargeUser(u.id, charged, { kind: "숏폼 영상", label: `${productName} (${quote.label})` })
+    : u.credits;
+
+  res.json({ ...result, charged, credits: remaining, quote });
 });
 
 /* 마진 시뮬레이션 (지시서 6·8) — 요금제별로 영상 몇 편까지 만들어야 적자가 나는지.
