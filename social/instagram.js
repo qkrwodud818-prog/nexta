@@ -106,4 +106,70 @@ async function handleCommentWebhook(body, rule) {
   return results;
 }
 
-module.exports = { publishCarouselPost, verifyWebhook, sendPrivateReply, handleCommentWebhook };
+/**
+ * 릴스 게시.
+ * 사진과 달리 영상은 컨테이너를 만든 즉시 발행할 수 없다 — 메타가 먼저 트랜스코딩을 하고,
+ * 끝나기 전에 media_publish를 부르면 실패한다. 그래서 status_code가 FINISHED가 될 때까지
+ * 기다린 뒤에 발행한다.
+ * @param {string} igUserId    인스타그램 비즈니스/크리에이터 계정 ID
+ * @param {string} accessToken 장기 액세스 토큰
+ * @param {string} videoUrl    공개 접근 가능한 mp4 주소
+ * @param {string} caption     본문
+ * @param {string} [coverUrl]  커버 이미지(생략 시 메타가 첫 프레임을 쓴다)
+ */
+async function publishReel(igUserId, accessToken, videoUrl, caption, coverUrl) {
+  const createRes = await fetch(`${GRAPH}/${igUserId}/media`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      media_type: "REELS",
+      video_url: videoUrl,
+      caption: caption || "",
+      ...(coverUrl ? { cover_url: coverUrl } : {}),
+      access_token: accessToken,
+    }),
+  });
+  const created = await createRes.json();
+  if (!createRes.ok) throw new Error("릴스 컨테이너 생성 실패: " + JSON.stringify(created));
+
+  // 트랜스코딩 대기 — 5초 간격으로 최대 5분. 짧은 영상은 보통 20~40초면 끝난다.
+  const deadline = Date.now() + 5 * 60 * 1000;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const stRes = await fetch(
+      `${GRAPH}/${created.id}?fields=status_code,status&access_token=${encodeURIComponent(accessToken)}`
+    );
+    const st = await stRes.json();
+    if (st.status_code === "FINISHED") break;
+    if (st.status_code === "ERROR") throw new Error("릴스 인코딩 실패: " + (st.status || ""));
+    if (Date.now() > deadline) throw new Error("릴스 인코딩이 5분 안에 끝나지 않았습니다.");
+  }
+
+  const pubRes = await fetch(`${GRAPH}/${igUserId}/media_publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ creation_id: created.id, access_token: accessToken }),
+  });
+  const published = await pubRes.json();
+  if (!pubRes.ok) throw new Error("릴스 게시 실패: " + JSON.stringify(published));
+  return published;
+}
+
+/** 계정 현황 — 팔로워 수와 게시물 수. 성장 그래프의 원천이다. */
+async function fetchProfileStats(igUserId, accessToken) {
+  const res = await fetch(
+    `${GRAPH}/${igUserId}?fields=username,followers_count,media_count&access_token=${encodeURIComponent(accessToken)}`
+  );
+  const data = await res.json();
+  if (!res.ok) throw new Error("계정 조회 실패: " + JSON.stringify(data));
+  return {
+    username: data.username || "",
+    followers: Number(data.followers_count || 0),
+    posts: Number(data.media_count || 0),
+  };
+}
+
+module.exports = {
+  publishCarouselPost, publishReel, fetchProfileStats,
+  verifyWebhook, sendPrivateReply, handleCommentWebhook,
+};

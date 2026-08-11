@@ -255,6 +255,54 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS auto_queue_user_status_idx
     ON auto_queue (user_id, status, created_at);
 
+  /* ── 인스타 키우기 ──────────────────────────────────────────
+     타깃 하나(누구에게 보일 것인가)를 정해두면, 거기서 이번 주 올릴 콘텐츠를 뽑아
+     예정 시각마다 카드뉴스나 릴스로 만들어 올린다. 쿠팡 보관함(auto_queue)과 분리한 건
+     저쪽은 '상품'이 단위이고 이쪽은 '게시물'이 단위이기 때문이다. */
+  CREATE TABLE IF NOT EXISTS ig_targets (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    topic TEXT NOT NULL,            -- 계정 주제 (예: 30대 직장인 재테크)
+    audience TEXT NOT NULL,         -- 보여줄 대상
+    tone TEXT NOT NULL DEFAULT '친근함',
+    hashtags TEXT,
+    posts_per_week INTEGER NOT NULL DEFAULT 5,
+    reel_ratio INTEGER NOT NULL DEFAULT 40,   -- 릴스 비율 %
+    hour INTEGER NOT NULL DEFAULT 19,         -- 올릴 시각 (KST)
+    enabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ig_posts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,             -- cardnews | reels
+    title TEXT NOT NULL,
+    hook TEXT NOT NULL,
+    bullets TEXT,                   -- JSON 배열
+    caption TEXT,
+    status TEXT NOT NULL DEFAULT 'planned',  -- planned | posting | done | failed | skipped
+    scheduled_for TEXT NOT NULL,    -- KST 'YYYY-MM-DD HH'
+    media_urls TEXT,                -- JSON 배열
+    permalink TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    posted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS ig_posts_due_idx
+    ON ig_posts (status, scheduled_for);
+  CREATE INDEX IF NOT EXISTS ig_posts_user_idx
+    ON ig_posts (user_id, created_at);
+
+  /* 팔로워 추이 — 하루 한 번만 찍는다(같은 날 두 번 조회해도 덮어쓴다). */
+  CREATE TABLE IF NOT EXISTS ig_growth (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    on_date TEXT NOT NULL,
+    followers INTEGER NOT NULL,
+    posts INTEGER NOT NULL,
+    PRIMARY KEY (user_id, on_date)
+  );
+
   CREATE TABLE IF NOT EXISTS auto_schedules (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     enabled INTEGER NOT NULL DEFAULT 0,
@@ -1233,6 +1281,100 @@ function markSmartstoreError(userId, error) {
     .run(error ? String(error).slice(0, 300) : null, new Date().toISOString(), userId);
 }
 
+
+/* ────────────────────────── 인스타 키우기 ────────────────────────── */
+
+function hydrateTarget(r) {
+  if (!r) return null;
+  return {
+    topic: r.topic, audience: r.audience, tone: r.tone, hashtags: r.hashtags || "",
+    postsPerWeek: r.posts_per_week, reelRatio: r.reel_ratio, hour: r.hour, enabled: !!r.enabled,
+  };
+}
+function getIgTarget(userId) {
+  return hydrateTarget(db.prepare("SELECT * FROM ig_targets WHERE user_id = ?").get(userId));
+}
+function upsertIgTarget(userId, t) {
+  const now = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO ig_targets (user_id, topic, audience, tone, hashtags, posts_per_week, reel_ratio, hour, enabled, created_at, updated_at)" +
+    " VALUES (@userId, @topic, @audience, @tone, @hashtags, @postsPerWeek, @reelRatio, @hour, @enabled, @now, @now)" +
+    " ON CONFLICT(user_id) DO UPDATE SET" +
+    "   topic = excluded.topic, audience = excluded.audience, tone = excluded.tone," +
+    "   hashtags = excluded.hashtags, posts_per_week = excluded.posts_per_week," +
+    "   reel_ratio = excluded.reel_ratio, hour = excluded.hour, enabled = excluded.enabled," +
+    "   updated_at = excluded.updated_at"
+  ).run({
+    userId, topic: t.topic, audience: t.audience, tone: t.tone || "친근함", hashtags: t.hashtags || "",
+    postsPerWeek: t.postsPerWeek, reelRatio: t.reelRatio, hour: t.hour, enabled: t.enabled ? 1 : 0, now,
+  });
+}
+
+function hydrateIgPost(r) {
+  const parse = (v, d) => { try { return v ? JSON.parse(v) : d; } catch { return d; } };
+  return {
+    id: r.id, kind: r.kind, title: r.title, hook: r.hook,
+    bullets: parse(r.bullets, []), caption: r.caption || "",
+    status: r.status, scheduledFor: r.scheduled_for,
+    mediaUrls: parse(r.media_urls, []), permalink: r.permalink || null,
+    error: r.error || null, createdAt: r.created_at, postedAt: r.posted_at || null,
+  };
+}
+function addIgPosts(userId, posts) {
+  const stmt = db.prepare(
+    "INSERT INTO ig_posts (id, user_id, kind, title, hook, bullets, caption, scheduled_for, created_at)" +
+    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  );
+  const now = new Date().toISOString();
+  db.transaction((rows) => {
+    for (const p of rows) {
+      stmt.run(p.id, userId, p.kind, p.title, p.hook, JSON.stringify(p.bullets || []),
+        p.caption || "", p.scheduledFor, now);
+    }
+  })(posts);
+}
+function listIgPosts(userId, limit) {
+  return db.prepare("SELECT * FROM ig_posts WHERE user_id = ? ORDER BY scheduled_for ASC LIMIT ?")
+    .all(userId, limit || 40).map(hydrateIgPost);
+}
+function deleteIgPost(userId, id) {
+  db.prepare("DELETE FROM ig_posts WHERE id = ? AND user_id = ? AND status IN ('planned','failed')")
+    .run(id, userId);
+}
+/** 예정 시각이 지난 '계획됨' 게시물. 한 주기에 몰아 올리지 않도록 호출부에서 순차 처리한다. */
+function getDueIgPosts(nowKstSlot, limit) {
+  return db.prepare(
+    "SELECT * FROM ig_posts WHERE status = 'planned' AND scheduled_for <= ?" +
+    " ORDER BY scheduled_for ASC LIMIT ?"
+  ).all(nowKstSlot, limit || 5).map((r) => Object.assign(hydrateIgPost(r), { userId: r.user_id }));
+}
+function markIgPost(id, status, fields) {
+  const f = fields || {};
+  db.prepare(
+    "UPDATE ig_posts SET status = ?, media_urls = COALESCE(?, media_urls)," +
+    " permalink = COALESCE(?, permalink), error = ?, posted_at = COALESCE(?, posted_at)" +
+    " WHERE id = ?"
+  ).run(status, f.mediaUrls ? JSON.stringify(f.mediaUrls) : null,
+    f.permalink || null, f.error || null, f.postedAt || null, id);
+}
+/** 같은 게시물이 두 번 올라가지 않도록, 집는 순간 posting으로 잠근다. */
+function claimIgPost(id) {
+  return db.prepare("UPDATE ig_posts SET status = 'posting' WHERE id = ? AND status = 'planned'")
+    .run(id).changes === 1;
+}
+
+function recordIgGrowth(userId, onDate, followers, posts) {
+  db.prepare(
+    "INSERT INTO ig_growth (user_id, on_date, followers, posts) VALUES (?, ?, ?, ?)" +
+    " ON CONFLICT(user_id, on_date) DO UPDATE SET followers = excluded.followers, posts = excluded.posts"
+  ).run(userId, onDate, followers, posts);
+}
+function listIgGrowth(userId, days) {
+  return db.prepare("SELECT on_date, followers, posts FROM ig_growth WHERE user_id = ? ORDER BY on_date DESC LIMIT ?")
+    .all(userId, days || 30).reverse()
+    .map((r) => ({ date: r.on_date, followers: r.followers, posts: r.posts }));
+}
+
 module.exports = {
   getSmartstoreAccount, upsertSmartstoreAccount, deleteSmartstoreAccount, markSmartstoreError,
   logVideoAttempt, getVideoServiceStats, getUserVideoCostThisMonth,
@@ -1241,6 +1383,8 @@ module.exports = {
   getTiktokAccount, upsertTiktokAccount, deleteTiktokAccount, markTiktokError,
   upsertRevenue, upsertRevenueMany, deleteRevenue, listRevenue, getRevenueTotal,
   getRevenueKey, setRevenueKey, deleteRevenueKey, markRevenueSync, listRevenueKeyUsers,
+  getIgTarget, upsertIgTarget, addIgPosts, listIgPosts, deleteIgPost,
+  getDueIgPosts, markIgPost, claimIgPost, recordIgGrowth, listIgGrowth,
   addQueueItem, listQueue, countPendingQueue, nextPendingQueueItem, markQueueItem, deleteQueueItem,
   getSchedule, upsertSchedule, getDueSchedules, markScheduleRun,
   getUserById, getUserByEmail, emailExists, createUser, updateCredits, updateCompany, setPromoOptout, setAccessUntil,

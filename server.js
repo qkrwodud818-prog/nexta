@@ -21,7 +21,7 @@ require("dotenv").config();
 
 const { generateCardNews } = require("./social/cardnews");
 const { generateShort } = require("./social/shorts");
-const { publishCarouselPost, verifyWebhook, handleCommentWebhook } = require("./social/instagram");
+const { publishCarouselPost, publishReel, fetchProfileStats, verifyWebhook, handleCommentWebhook } = require("./social/instagram");
 const db = require("./db"); // SQLite(better-sqlite3) 기반 저장소 — data/nexta.db
 
 const app = express();
@@ -1730,6 +1730,224 @@ setInterval(() => {
   catch (e) { console.warn("[예약 조회 실패 — 무시]", e.message); return; }
   // 한 주기에 여러 사용자가 걸려도 순차 실행한다 (동시에 여러 건이 돌면 API 한도에 걸린다)
   due.reduce((chain, s) => chain.then(() => runScheduledPost(s).catch(() => {})), Promise.resolve());
+}, AUTO_SCHEDULE_CHECK_MS);
+
+/* ══════════════════════════════════════════════════════════════
+   3-2-1) 인스타 키우기 — 타깃 → 콘텐츠 계획 → 정해진 시각에 자동 발행
+
+   카드뉴스와 릴스를 따로 두지 않는다. 계정을 키우는 일에서 둘은 같은 목적을 가진
+   두 가지 형식일 뿐이고, 사용자가 정하는 건 "누구에게 보일 것인가" 하나다. 거기서
+   이번 주 올릴 것을 뽑고, 형식은 릴스 비율에 따라 자동으로 섞는다.
+
+   릴스는 카드뉴스 슬라이드를 그대로 9:16 영상으로 엮는다. 별도 영상 API를 쓰지 않으므로
+   외부 비용이 0이고(ffmpeg는 서버 CPU만 쓴다), 그래서 릴스 단가를 낮게 잡을 수 있다.
+   ══════════════════════════════════════════════════════════════ */
+const COST_IG_CARDNEWS = COST_CARDNEWS;      // 카드뉴스 1건 = 30
+const COST_IG_REELS = COST_CARDNEWS + 15;    // 슬라이드 생성 + 인코딩. 인코딩은 외부 과금이 없다.
+const IG_MAX_PER_PLAN = 14;                  // 한 번에 계획할 수 있는 최대 게시물 수(2주치)
+const IG_POST_BATCH = 3;                     // 한 주기에 올릴 최대 건수 — 인스타 24시간 25건 한도를 넘지 않게
+
+/** KST 'YYYY-MM-DD HH' — 예정 시각 비교용 슬롯. */
+function kstSlot(d) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false,
+  }).formatToParts(d || new Date());
+  const g = (t) => parts.find((x) => x.type === t)?.value || "";
+  return g("year") + "-" + g("month") + "-" + g("day") + " " + g("hour");
+}
+/** 오늘로부터 n일 뒤, 지정한 시각의 슬롯. */
+function kstSlotInDays(n, hour) {
+  const d = new Date(Date.now() + n * 86400000);
+  const day = kstSlot(d).slice(0, 10);
+  return day + " " + String(hour).padStart(2, "0");
+}
+
+function igTargetOrDefault(userId) {
+  return db.getIgTarget(userId) || {
+    topic: "", audience: "", tone: "친근함", hashtags: "",
+    postsPerWeek: 5, reelRatio: 40, hour: 19, enabled: false,
+  };
+}
+
+app.get("/api/instagram/overview", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  res.json({
+    connected: !!(u.social && u.social.instagram),
+    target: igTargetOrDefault(u.id),
+    posts: db.listIgPosts(u.id, 40),
+    growth: db.listIgGrowth(u.id, 30),
+    cost: { cardnews: COST_IG_CARDNEWS, reels: COST_IG_REELS },
+  });
+});
+
+app.post("/api/instagram/target", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const b = req.body || {};
+  const topic = String(b.topic || "").trim().slice(0, 80);
+  const audience = String(b.audience || "").trim().slice(0, 120);
+  if (!topic) return res.status(400).json({ error: "계정 주제를 적어 주세요." });
+  if (!audience) return res.status(400).json({ error: "누구에게 보여줄지 적어 주세요." });
+  // 자동 발행을 켜려면 계정이 연결돼 있어야 한다 — 안 그러면 예정 시각마다 조용히 실패한다.
+  const enabled = !!b.enabled;
+  if (enabled && !(u.social && u.social.instagram)) {
+    return res.status(400).json({ error: "먼저 인스타그램 계정을 연결해 주세요." });
+  }
+  db.upsertIgTarget(u.id, {
+    topic, audience,
+    tone: String(b.tone || "친근함").trim().slice(0, 20),
+    hashtags: String(b.hashtags || "").trim().slice(0, 200),
+    postsPerWeek: Math.max(1, Math.min(14, parseInt(b.postsPerWeek, 10) || 5)),
+    reelRatio: Math.max(0, Math.min(100, parseInt(b.reelRatio, 10) || 40)),
+    hour: Math.max(0, Math.min(23, parseInt(b.hour, 10) || 19)),
+    enabled,
+  });
+  res.json({ ok: true, target: db.getIgTarget(u.id) });
+});
+
+/* 타깃 → 이번 주 올릴 것. 아이디어만 만들고 이미지는 아직 만들지 않는다.
+   미리 다 만들어두면 사용자가 계획을 지웠을 때 이미 쓴 크레딧을 돌려줄 수 없다. */
+app.post("/api/instagram/plan", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) return res.status(402).json({ error: "이용 기간이 지났습니다. 다시 결제해 주세요." });
+
+  const t = db.getIgTarget(u.id);
+  if (!t || !t.topic) return res.status(400).json({ error: "먼저 타깃을 저장해 주세요." });
+
+  const already = db.listIgPosts(u.id, 100).filter((x) => x.status === "planned").length;
+  const want = Math.min(t.postsPerWeek, IG_MAX_PER_PLAN - already);
+  if (want <= 0) return res.status(400).json({ error: "계획된 게시물이 이미 충분합니다. 발행되거나 지운 뒤에 다시 만들어 주세요." });
+
+  const reels = Math.round((want * t.reelRatio) / 100);
+
+  const prompt =
+    "너는 인스타그램 계정을 키우는 콘텐츠 기획자다.\n" +
+    "계정 주제: " + t.topic + "\n" +
+    "보여줄 대상: " + t.audience + "\n" +
+    "말투: " + t.tone + "\n" +
+    "만들 개수: " + want + "개 (이 중 " + reels + "개는 릴스, 나머지는 카드뉴스)\n\n" +
+    "대상이 저장하거나 공유할 만한 것만 만든다. 광고 문구, 과장, 근거 없는 수치는 쓰지 않는다.\n" +
+    "hook은 첫 화면에 크게 들어갈 한 줄이라 18자를 넘기지 않는다.\n" +
+    "bullets는 카드 본문에 들어갈 짧은 문장 3개.\n" +
+    "caption은 인스타 본문(2~3문장) + 해시태그 5개.\n\n" +
+    'JSON만 출력한다: {"posts":[{"kind":"cardnews|reels","title":"내부 제목","hook":"첫 화면 한 줄","bullets":["","",""],"caption":"본문 + 해시태그"}]}';
+
+  try {
+    const raw = await callWithFallback(loadModelConfig(), "sns", prompt, false, 2200, { userId: u.id, kind: "ig_plan" });
+    const parsed = parseJSON(raw);
+    let items = Array.isArray(parsed && parsed.posts) ? parsed.posts : [];
+    if (!items.length) return res.status(502).json({ error: "콘텐츠 계획을 못 만들었어요. 잠시 뒤 다시 시도해 주세요." });
+    items = items.slice(0, want);
+
+    // 예정 시각은 서버가 정한다 — 모델이 날짜를 지어내면 과거로 잡히거나 한꺼번에 몰린다.
+    const rows = items.map((it, i) => ({
+      id: crypto.randomBytes(6).toString("hex"),
+      kind: it.kind === "reels" ? "reels" : "cardnews",
+      title: String(it.title || it.hook || "제목 없음").slice(0, 80),
+      hook: String(it.hook || "").slice(0, 40),
+      bullets: (Array.isArray(it.bullets) ? it.bullets : []).slice(0, 3).map((x) => String(x).slice(0, 60)),
+      caption: String(it.caption || "").slice(0, 1200),
+      scheduledFor: kstSlotInDays(i + 1, t.hour),
+    }));
+    db.addIgPosts(u.id, rows);
+    res.json({ ok: true, added: rows.length, posts: db.listIgPosts(u.id, 40) });
+  } catch (e) {
+    res.status(500).json({ error: "콘텐츠 계획 실패: " + e.message });
+  }
+});
+
+app.delete("/api/instagram/posts/:id", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  db.deleteIgPost(u.id, String(req.params.id));
+  res.json({ ok: true, posts: db.listIgPosts(u.id, 40) });
+});
+
+/* 팔로워 수 새로고침 — 성장 그래프의 원천. 하루 한 칸만 기록된다. */
+app.post("/api/instagram/sync", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const social = u.social && u.social.instagram;
+  if (!social) return res.status(400).json({ error: "먼저 인스타그램 계정을 연결해 주세요." });
+  try {
+    const st = await fetchProfileStats(social.igUserId, decryptSecret(social.accessTokenEnc));
+    db.recordIgGrowth(u.id, kstNow().date, st.followers, st.posts);
+    res.json({ ok: true, stats: st, growth: db.listIgGrowth(u.id, 30) });
+  } catch (e) {
+    res.status(502).json({ error: "계정 조회 실패: " + e.message });
+  }
+});
+
+/* ── 발행기 ──────────────────────────────────────────────────
+   예정 시각이 된 게시물 하나를 실제 이미지/영상으로 만들어 인스타에 올린다.
+   크레딧은 만들기 직전에 확인하고, 발행에 성공한 뒤에 뺀다. */
+async function runIgPost(post) {
+  const user = db.getUserById(post.userId);
+  if (!user) return db.markIgPost(post.id, "skipped", { error: "사용자 없음" });
+
+  const social = user.social && user.social.instagram;
+  if (!social) return db.markIgPost(post.id, "skipped", { error: "인스타그램 연결이 해제되어 건너뜀" });
+  if (!hasValidAccess(user)) return db.markIgPost(post.id, "skipped", { error: "이용 기간이 끝나 건너뜀" });
+
+  const cost = post.kind === "reels" ? COST_IG_REELS : COST_IG_CARDNEWS;
+  if ((user.credits || 0) < cost) return db.markIgPost(post.id, "skipped", { error: "크레딧이 부족해 건너뜀" });
+
+  const slug = crypto.randomBytes(6).toString("hex");
+  const outDir = path.join(__dirname, "public", "cardnews", slug);
+  const videoDir = path.join(__dirname, "public", "shorts", slug);
+
+  try {
+    await generateCardNews(
+      {
+        name: post.title, hook: post.hook, tag: "오늘의 발견",
+        bullets: post.bullets, price: "", commentKeyword: "정보",
+      },
+      outDir
+    );
+    const files = ["slide1.png", "slide2.png", "slide3.png"];
+    const urls = files.map((f) => PUBLIC_BASE_URL + "/cardnews/" + slug + "/" + f);
+    const token = decryptSecret(social.accessTokenEnc);
+
+    let result;
+    if (post.kind === "reels") {
+      fs.mkdirSync(videoDir, { recursive: true });
+      const outPath = path.join(videoDir, "reel.mp4");
+      await generateShort(files.map((f) => path.join(outDir, f)), outPath);
+      result = await publishReel(
+        social.igUserId, token, PUBLIC_BASE_URL + "/shorts/" + slug + "/reel.mp4", post.caption, urls[0]
+      );
+    } else {
+      result = await publishCarouselPost(social.igUserId, token, urls, post.caption);
+    }
+
+    db.updateCredits(user.id, Math.max(0, (user.credits || 0) - cost), user.ceiling);
+    db.addUsage(user.id, { at: nowKR(), amount: cost, kind: post.kind === "reels" ? "릴스 발행" : "카드뉴스 발행", label: post.title });
+    db.markIgPost(post.id, "done", {
+      mediaUrls: urls,
+      permalink: result && result.id ? "https://www.instagram.com/p/" + result.id : null,
+      postedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    db.markIgPost(post.id, "failed", { error: String(e.message || e).slice(0, 300) });
+    console.error("[인스타 발행 실패]", post.id, e.message);
+  } finally {
+    // 릴스 영상은 발행되면 서버에 둘 이유가 없다. 카드뉴스 이미지는 인스타가 이미 받아갔지만
+    // 사용자가 내려받을 수 있게 남긴다.
+    fs.rmSync(videoDir, { recursive: true, force: true });
+  }
+}
+
+setInterval(() => {
+  let due = [];
+  try { due = db.getDueIgPosts(kstSlot(), IG_POST_BATCH); }
+  catch (e) { console.warn("[인스타 예약 조회 실패 — 무시]", e.message); return; }
+  // 순차 실행 — 동시에 여러 건을 올리면 인스타 API 한도에 걸린다.
+  due.reduce(
+    (chain, post) => chain.then(() => (db.claimIgPost(post.id) ? runIgPost(post).catch(() => {}) : null)),
+    Promise.resolve()
+  );
 }, AUTO_SCHEDULE_CHECK_MS);
 
 /* ══════════════════════════════════════════════════════════════

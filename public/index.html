@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script src="https://js.tosspayments.com/v2/standard"></script>
+<script src="/bibi.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root{
@@ -96,35 +97,39 @@
     color:rgba(255,255,255,.5); display:flex; align-items:center; gap:10px; margin-bottom:20px; }
   .hero-eyebrow::before{ content:''; width:22px; height:1px; background:rgba(255,255,255,.32); }
 
-  /* ── 근무 현황판 ────────────────────────────────────────────
-     이 제품이 파는 것은 도구가 아니라 "고용"이다. 그래서 히어로에는 마스코트 대신
-     사무실 벽에 걸린 근무표를 놓는다. 표는 히어로 비주얼로 흔한 선택이 아니지만,
-     "지금 누가 무슨 일을 하고 있다"를 보여주는 데는 그림보다 표가 강하다.
-     시각과 사번을 고정폭으로 정렬해 실제 근무 기록처럼 읽히게 한다. */
-  .shiftboard{ flex:0 0 392px; background:rgba(255,255,255,.038); border:1px solid rgba(255,255,255,.13);
-    border-radius:var(--r-3); padding:15px 18px 12px; backdrop-filter:blur(10px);
-    box-shadow:0 24px 60px -28px rgba(0,0,0,.9); }
-  @media(max-width:940px){ .shiftboard{ display:none; } }
-  .shiftboard-head{ display:flex; align-items:baseline; justify-content:space-between; gap:10px;
-    padding-bottom:11px; border-bottom:1px solid rgba(255,255,255,.14); margin-bottom:4px; }
-  .shiftboard-head b{ font-family:var(--f-display); font-size:12.5px; font-weight:600; color:#fff;
-    letter-spacing:.1em; }
-  .shiftboard-clock{ font-family:var(--f-data); font-size:12px; color:rgba(255,255,255,.55);
-    font-variant-numeric:tabular-nums; }
-  .shiftrow{ display:flex; align-items:center; gap:10px; padding:7px 0; }
-  .shiftrow .id{ font-family:var(--f-data); font-size:11px; color:rgba(255,255,255,.4); width:26px; flex-shrink:0; }
-  .shiftrow .who{ font-size:12.5px; color:rgba(255,255,255,.9); flex:1; min-width:0;
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .shiftrow .st{ font-family:var(--f-data); font-size:10.5px; letter-spacing:.02em; padding:2px 8px;
-    border-radius:999px; flex-shrink:0; }
-  .st.on{ color:#c7c0ff; background:rgba(91,75,245,.34); }
-  .st.done{ color:rgba(255,255,255,.45); background:rgba(255,255,255,.07); }
-  .shiftboard-foot{ margin-top:8px; padding-top:10px; border-top:1px solid rgba(255,255,255,.14);
-    font-size:11.5px; color:rgba(255,255,255,.5); }
+  /* ── 팀 조직도 ──────────────────────────────────────────────
+     이 제품이 파는 건 도구가 아니라 "일을 나눠 맡기는 것"이다. 그래서 히어로에는
+     업무 한 줄이 팀장을 거쳐 네 갈래로 갈라지는 그림을 놓는다. 갈래마다 상태가 붙어
+     "지금 누가 어느 단계를 하고 있다"까지 한 장에서 읽힌다. */
+  .orgchart{ flex:0 0 440px; position:relative; }
+  @media(max-width:1040px){ .orgchart{ display:none; } }
+  .org-task{ display:flex; align-items:center; gap:9px; background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.14); border-radius:var(--r-1); padding:9px 13px;
+    font-size:13px; color:rgba(255,255,255,.92); margin-bottom:14px; }
+  .org-task .qm{ font-family:var(--f-data); font-size:11px; color:rgba(255,255,255,.42); }
+  .org-lead{ display:flex; flex-direction:column; align-items:center; }
+  .org-lead .bibi{ width:96px; height:86px; }
+  .org-tag{ font-family:var(--f-display); font-size:11.5px; font-weight:600; letter-spacing:.02em;
+    color:#fff; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18);
+    border-radius:999px; padding:3px 11px; margin-top:2px; white-space:nowrap; }
+  /* 갈래 — 팀장 아래에서 넷으로 퍼지는 선. SVG 한 장으로 그려야 곡선이 자연스럽다. */
+  .org-fan{ display:block; width:100%; height:38px; }
+  .org-row{ display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
+  .org-mem{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; }
+  .org-mem .bibi{ width:62px; height:70px; }
+  .org-step{ font-size:12px; color:rgba(255,255,255,.9); font-weight:600; }
+  .org-state{ font-family:var(--f-data); font-size:9.5px; letter-spacing:.02em; padding:2px 7px;
+    border-radius:999px; white-space:nowrap; }
+  .org-state.on{ color:#c7c0ff; background:rgba(91,75,245,.36); }
+  .org-state.wait{ color:rgba(255,255,255,.45); background:rgba(255,255,255,.07); }
+  .org-foot{ display:flex; align-items:center; justify-content:space-between; gap:10px;
+    margin-top:16px; padding-top:12px; border-top:1px solid rgba(255,255,255,.13);
+    font-size:11.5px; color:rgba(255,255,255,.52); }
+  .org-clock{ font-family:var(--f-data); font-variant-numeric:tabular-nums; }
   /* 상태가 바뀔 때만 아주 짧게 — 배경에서 계속 움직이면 읽기를 방해한다 */
-  @keyframes shiftIn{ from{ opacity:.25; } to{ opacity:1; } }
-  .shiftrow .st.just{ animation:shiftIn .5s ease; }
-  @media(prefers-reduced-motion:reduce){ .shiftrow .st.just{ animation:none; } }
+  @keyframes orgIn{ from{ opacity:.25; } to{ opacity:1; } }
+  .org-state.just{ animation:orgIn .5s ease; }
+  @media(prefers-reduced-motion:reduce){ .org-state.just{ animation:none; } }
   .hero-headline { font-family:var(--f-display); color:#fff; font-size:clamp(34px,4.6vw,54px); font-weight:700;
     line-height:1.14; letter-spacing:-.035em; margin-bottom:18px; }
   .hero-headline em{ font-style:normal; color:#a78bfa; }
@@ -208,10 +213,7 @@
   .ai-card.manager-bar{ flex-direction:row; align-items:center; padding:13px 16px; gap:15px;
     cursor:default; margin-bottom:18px; background:#fff; border-color:#d5d1fb; }
   .ai-card.manager-bar:hover{ transform:none; box-shadow:var(--sh-1); }
-  .ai-card.manager-bar .p-badge{ width:58px; height:58px; flex-shrink:0; }
-  /* 58px에서 격자선은 0.6px, 사번은 6.7px로 떨어진다 — 읽히지 않고 얼룩으로만 남으므로 뺀다.
-     사번은 바로 옆에 글자로 이미 적혀 있다. */
-  .ai-card.manager-bar .p-badge .gr, .ai-card.manager-bar .p-badge .sn{ display:none; }
+  .ai-card.manager-bar .p-badge{ width:52px; height:62px; flex-shrink:0; }
   .ai-card.manager-bar .mb-info{ flex:1; min-width:0; }
   .ai-card.manager-bar .cname{ font-size:15px; }
   .ai-card.manager-bar .crole{ margin-top:2px; }
@@ -234,7 +236,7 @@
   .card-grid.mode-slide .ai-card{ flex:0 0 320px; scroll-snap-align:center; }
   @media(max-width:640px){ .card-grid.mode-slide .ai-card{ flex:0 0 84%; } }
   .mode-slide .portrait{ height:228px; }
-  .mode-slide .p-badge{ width:164px; height:164px; }
+  .mode-slide .p-badge{ width:200px; height:180px; }
   .navarrow{ position:absolute; top:120px; z-index:6; width:42px; height:42px; border-radius:50%;
     background:#fff; border:1px solid var(--line); box-shadow:var(--sh-2);
     font-size:24px; line-height:1; color:var(--ink); display:flex; align-items:center; justify-content:center;
@@ -267,12 +269,11 @@
     color:var(--soft); background:#f3f4f6; border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
   .portrait{ position:relative; height:150px; overflow:hidden; background:#fff;
     display:flex; align-items:center; justify-content:center; }
-  .p-badge{ width:108px; height:108px; display:block; transition:transform .25s;
-    filter:drop-shadow(0 8px 16px rgba(11,14,20,.10)); }
-  .p-badge .sn, .p-badge-lg .sn{ font-family:var(--f-data); font-weight:500; }
-  @keyframes botwork{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+  .p-badge{ width:126px; height:113px; display:block; transition:transform .25s; }
+  .ai-card:hover .p-badge{ transform:translateY(-3px); }
+  @keyframes botwork{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
   .ai-card.st-work .p-badge,.ai-card.st-think .p-badge{ animation:botwork 1.6s ease-in-out infinite; }
-  .ai-card:not(.selected) .p-badge{ filter:grayscale(.55); opacity:.7; }
+  .ai-card:not(.selected) .p-badge{ filter:grayscale(.85); opacity:.55; }
   .cbody{ padding:11px 13px 13px; }
   .cname{ font-family:var(--f-data); font-size:12.5px; font-weight:600; letter-spacing:-.01em; }
   .crole{ font-size:11.5px; color:var(--soft); margin-top:1px; line-height:1.35; }
@@ -298,8 +299,7 @@
   .prof-hero{ height:200px; border-radius:var(--r-2); overflow:hidden; position:relative;
     background:var(--bg); border:1px solid var(--line); margin-bottom:14px;
     display:flex; align-items:center; justify-content:center; }
-  .p-badge-lg{ width:156px; height:156px; display:block;
-    filter:drop-shadow(0 12px 26px rgba(11,14,20,.14)); }
+  .p-badge-lg{ width:186px; height:167px; display:block; }
   .prof-name{ font-size:20px; font-weight:800; }
   .prof-role{ font-size:13px; color:var(--soft); margin-top:2px; }
   .prof-desc{ font-size:13.5px; margin:12px 0 4px; line-height:1.6; }
@@ -516,6 +516,57 @@
   .cn-hist-item .tm{ font-size:11.5px; color:var(--soft); margin-top:2px; }
   .cn-hist-item .dl{ margin-left:auto; font-size:12px; color:var(--purple); font-weight:700; text-decoration:none; }
 
+  /* ══════ SCREEN 8 — 인스타 키우기 ══════ */
+  #screen8 .main-content{ background:var(--bg); }
+  .ig-grid{ display:grid; grid-template-columns:minmax(320px,400px) 1fr; gap:20px; align-items:start; }
+  @media(max-width:940px){ .ig-grid{ grid-template-columns:1fr; } }
+  .ig-box{ background:#fff; border:1px solid var(--line); border-radius:var(--r-3); padding:18px; }
+  .ig-box + .ig-box{ margin-top:14px; }
+  .ig-box label{ display:block; font-size:13px; font-weight:700; margin:13px 0 6px; }
+  .ig-box label:first-of-type{ margin-top:0; }
+  .ig-box input, .ig-box select{ width:100%; padding:10px 13px; border:1px solid var(--line);
+    border-radius:var(--r-1); font-family:var(--f); font-size:14px; background:#fff; }
+  .ig-box input:focus, .ig-box select:focus{ outline:none; border-color:var(--purple);
+    box-shadow:0 0 0 3px rgba(91,75,245,.12); }
+  .ig-two{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .ig-hint{ font-size:11.5px; color:var(--soft); margin-top:5px; line-height:1.5; }
+  .ig-mix{ display:flex; align-items:center; gap:10px; margin-top:8px; }
+  .ig-mix input[type=range]{ flex:1; padding:0; }
+  .ig-mix b{ font-family:var(--f-data); font-size:12.5px; color:var(--purple); white-space:nowrap; }
+  .ig-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+  .ig-actions .bigbtn{ flex:1; min-width:130px; }
+  /* 연결 안내 — 켜기 전에 반드시 읽어야 하는 조건이라 눈에 걸리게 둔다 */
+  .ig-warn{ background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; border-radius:var(--r-1);
+    padding:11px 13px; font-size:12.5px; line-height:1.6; margin-top:12px; }
+  .ig-warn b{ font-weight:700; }
+  /* 성장 그래프 — 막대 하나가 하루 */
+  .ig-stat{ display:flex; align-items:baseline; gap:10px; margin-bottom:12px; }
+  .ig-stat .n{ font-family:var(--f-data); font-variant-numeric:tabular-nums; font-size:30px;
+    font-weight:600; color:var(--ink); }
+  .ig-stat .d{ font-family:var(--f-data); font-size:12.5px; font-weight:600; }
+  .ig-stat .d.up{ color:var(--green); } .ig-stat .d.flat{ color:var(--soft); }
+  .ig-spark{ display:flex; align-items:flex-end; gap:3px; height:56px; }
+  .ig-spark i{ flex:1; background:var(--wash); border-radius:2px 2px 0 0; min-height:2px; display:block; }
+  .ig-spark i.on{ background:var(--purple); }
+  /* 예정된 게시물 */
+  .ig-post{ display:flex; align-items:center; gap:12px; padding:11px 0; border-top:1px solid var(--line); }
+  .ig-post:first-child{ border-top:none; }
+  .ig-kind{ font-family:var(--f-data); font-size:10px; letter-spacing:.04em; padding:3px 8px;
+    border-radius:999px; flex-shrink:0; }
+  .ig-kind.cardnews{ color:#5b21b6; background:var(--wash); }
+  .ig-kind.reels{ color:#0e7490; background:#cffafe; }
+  .ig-post .tx{ flex:1; min-width:0; }
+  .ig-post .hk{ font-size:13.5px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ig-post .wh{ font-family:var(--f-data); font-size:11px; color:var(--soft); margin-top:2px; }
+  .ig-post .st{ font-size:11px; font-weight:700; flex-shrink:0; }
+  .ig-post .st.planned{ color:var(--soft); } .ig-post .st.done{ color:var(--green); }
+  .ig-post .st.failed{ color:var(--red); } .ig-post .st.posting{ color:var(--amber); }
+  .ig-post .st.skipped{ color:var(--soft); }
+  .ig-post .rm{ border:none; background:none; color:var(--soft); font-size:16px; cursor:pointer;
+    padding:2px 5px; border-radius:6px; flex-shrink:0; }
+  .ig-post .rm:hover{ background:#f1f3f8; color:var(--red); }
+  .ig-empty{ color:var(--soft); font-size:13.5px; text-align:center; padding:30px 0; }
+
   /* 법적 문서 링크(랜딩 하단) */
   .landing-legal{ position:relative; z-index:10; text-align:center; padding:14px 0 22px; }
   .landing-legal a{ color:rgba(255,255,255,.55); font-size:12px; text-decoration:none; margin:0 10px; }
@@ -563,13 +614,21 @@
       </div>
     </div>
 
-    <div class="shiftboard" aria-label="비비 근무 현황">
-      <div class="shiftboard-head">
-        <b>근무 현황</b>
-        <span class="shiftboard-clock" id="shiftClock">--:--</span>
-      </div>
-      <div id="shiftRows"></div>
-      <div class="shiftboard-foot">교대 없음 · 연중무휴</div>
+    <div class="orgchart" aria-label="비비 팀 업무 배분">
+      <div class="org-task"><span class="qm">지시</span>“이번 주 신제품 블로그 글 써줘”</div>
+      <div class="org-lead" id="orgLead"></div>
+      <svg class="org-fan" viewBox="0 0 440 38" aria-hidden="true" fill="none"
+           stroke="rgba(255,255,255,.26)" stroke-width="1.5">
+        <path d="M220 0v9"/>
+        <path d="M220 9H58a6 6 0 0 0-6 6v9"/>
+        <path d="M220 9h-52a6 6 0 0 0-6 6v9"/>
+        <path d="M220 9h52a6 6 0 0 1 6 6v9"/>
+        <path d="M220 9h162a6 6 0 0 1 6 6v9"/>
+        <path d="M52 30l-3-4h6zM162 30l-3-4h6zM278 30l-3-4h6zM388 30l-3-4h6z"
+              fill="rgba(255,255,255,.26)" stroke="none"/>
+      </svg>
+      <div class="org-row" id="orgRow"></div>
+      <div class="org-foot"><span>교대 없음 · 연중무휴</span><span class="org-clock" id="orgClock">--:--</span></div>
     </div>
   </div>
   <div class="landing-legal">
@@ -823,6 +882,82 @@
       <thead><tr><th>날짜</th><th>채널</th><th>금액</th><th>수집</th><th></th></tr></thead>
       <tbody id="revRecent"><tr><td colspan="5" style="color:var(--soft);text-align:center;">아직 기록이 없어요.</td></tr></tbody>
     </table>
+  </div>
+</div>
+
+<!-- ══════ SCREEN 8 — 인스타 키우기 ══════ -->
+<div id="screen8" class="screen app-layout">
+  <aside class="sidebar" data-sb="insta"></aside>
+  <div class="main-content">
+    <h1 class="dashboard-title">인스타 키우기</h1>
+    <p style="text-align:center;color:var(--soft);font-size:13.5px;margin:-8px 0 22px;">
+      누구에게 보일지만 정하면, 비비가 카드뉴스와 릴스를 만들어 정해진 시각에 올립니다.</p>
+
+    <div class="ig-grid">
+      <!-- 왼쪽: 타깃 -->
+      <div>
+        <div class="t-label" style="margin-bottom:12px;">누구에게 보일까요</div>
+        <div class="ig-box">
+          <label for="igTopic">계정 주제</label>
+          <input id="igTopic" placeholder="예: 30대 직장인 재테크">
+          <label for="igAudience">보여줄 대상</label>
+          <input id="igAudience" placeholder="예: 월급 모으기 시작한 사회초년생">
+          <label for="igTone">말투</label>
+          <select id="igTone">
+            <option>친근함</option><option>정보형</option><option>단호함</option><option>유머러스</option>
+          </select>
+          <label for="igHashtags">고정 해시태그</label>
+          <input id="igHashtags" placeholder="#재테크 #직장인">
+
+          <div class="ig-two" style="margin-top:13px;">
+            <div>
+              <label for="igPerWeek" style="margin-top:0;">주당 게시물</label>
+              <select id="igPerWeek"></select>
+            </div>
+            <div>
+              <label for="igHour" style="margin-top:0;">올릴 시각</label>
+              <select id="igHour"></select>
+            </div>
+          </div>
+
+          <label>카드뉴스 · 릴스 비율</label>
+          <div class="ig-mix">
+            <input type="range" id="igRatio" min="0" max="100" step="10" value="40">
+            <b id="igRatioTxt">릴스 40%</b>
+          </div>
+          <div class="ig-hint">릴스는 카드뉴스 슬라이드를 세로 영상으로 엮어 만듭니다.
+            영상 API를 쓰지 않아 추가 비용이 거의 없어요.</div>
+
+          <label style="display:flex;align-items:center;gap:8px;margin-top:15px;font-weight:600;">
+            <input type="checkbox" id="igEnabled" style="width:auto;"> 자동 발행 켜기
+          </label>
+
+          <div class="ig-actions">
+            <button class="bigbtn gh" id="igSaveBtn">타깃 저장</button>
+            <button class="bigbtn go" id="igPlanBtn">이번 주 콘텐츠 만들기</button>
+          </div>
+          <div class="cn-cost" id="igCost"></div>
+          <div class="ig-warn" id="igWarn" style="display:none;"></div>
+        </div>
+      </div>
+
+      <!-- 오른쪽: 성장 + 예정 -->
+      <div>
+        <div class="t-label" style="margin-bottom:12px;">성장 현황</div>
+        <div class="ig-box">
+          <div class="ig-stat">
+            <span class="n" id="igFollowers">—</span>
+            <span class="d flat" id="igDelta"></span>
+            <button class="btn-sm" id="igSyncBtn" style="margin-left:auto;">새로고침</button>
+          </div>
+          <div class="ig-spark" id="igSpark"></div>
+          <div class="ig-hint" id="igGrowthNote">계정을 연결하고 새로고침하면 팔로워 추이가 쌓입니다.</div>
+        </div>
+
+        <div class="t-label" style="margin:22px 0 12px;">올릴 예정</div>
+        <div class="ig-box" id="igPosts"><div class="ig-empty">아직 계획된 게시물이 없어요.</div></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1088,19 +1223,19 @@
 
 /* ══════ 직원 정보 ══════ */
 var CREW = [
-  { name:'전략기획', role:'전략기획 담당',        color:'#4f46e5', img:'strategy',   desc:'사업 방향·신규 아이템·성장 전략을 조사하고 제안해요.' },
-  { name:'재무분석', role:'재무분석 담당',        color:'#4338ca', img:'finance',    desc:'매출·비용·수익성 같은 숫자를 정리하고 분석해요.' },
-  { name:'SEO',      role:'SEO 담당',             color:'#7c3aed', img:'seo',        desc:'검색 노출을 높일 키워드와 콘텐츠 구조를 제안해요.' },
+  { name:'전략기획', role:'전략기획 담당',        color:'#7c3aed', img:'strategy',   desc:'사업 방향·신규 아이템·성장 전략을 조사하고 제안해요.' },
+  { name:'재무분석', role:'재무분석 담당',        color:'#1d4ed8', img:'finance',    desc:'매출·비용·수익성 같은 숫자를 정리하고 분석해요.' },
+  { name:'SEO',      role:'SEO 담당',             color:'#0284c7', img:'seo',        desc:'검색 노출을 높일 키워드와 콘텐츠 구조를 제안해요.' },
   { name:'고객문의', role:'고객문의 응대 담당',    color:'#0d9488', img:'cs',         desc:'고객 문의에 대한 답변 초안을 써요.' },
-  { name:'영업관리', role:'영업관리 담당',        color:'#0891b2', img:'sales',      desc:'영업 절차·고객 관리·제안서 구조를 정리해요.' },
-  { name:'채용',     role:'채용 담당',            color:'#475569', img:'hiring',     desc:'채용 공고문과 지원자 검토 기준을 만들어요.' },
+  { name:'영업관리', role:'영업관리 담당',        color:'#16a34a', img:'sales',      desc:'영업 절차·고객 관리·제안서 구조를 정리해요.' },
+  { name:'채용',     role:'채용 담당',            color:'#ea580c', img:'hiring',     desc:'채용 공고문과 지원자 검토 기준을 만들어요.' },
   { name:'총괄AI',   role:'총괄 (검수·판단)',     color:'#5b4bf5', img:'manager',    desc:'모든 비비의 결과를 검수하고 보고서를 올려요.' },
-  { name:'SNS콘텐츠',role:'SNS·블로그 콘텐츠',    color:'#8b5cf6', img:'sns',        desc:'SNS·블로그에 올릴 글 초안을 써요.' },
+  { name:'SNS콘텐츠',role:'SNS·블로그 콘텐츠',    color:'#ec4899', img:'sns',        desc:'SNS·블로그에 올릴 글 초안을 써요.' },
   { name:'카피라이터',role:'카피라이터',          color:'#a855f7', img:'copywriter', desc:'광고 문구·상세페이지 문구를 써요.' },
-  { name:'이메일',   role:'이메일 담당',          color:'#0e7490', img:'email',      desc:'고객·거래처에 보낼 이메일 초안을 써요.' },
-  { name:'성장코치', role:'성장 코치',            color:'#6366f1', img:'coach',      desc:'업무 습관·목표 관리·우선순위를 도와요.' },
-  { name:'이커머스', role:'이커머스 운영 담당',    color:'#64748b', img:'ecommerce',  desc:'스마트스토어·쿠팡 운영을 정리해요.' },
-  { name:'비서',     role:'비서 (이미지 기획)',   color:'#9333ea', img:'assistant',  desc:'이미지 기획안(장면·문구·구도)을 글로 써요.' }
+  { name:'이메일',   role:'이메일 담당',          color:'#0891b2', img:'email',      desc:'고객·거래처에 보낼 이메일 초안을 써요.' },
+  { name:'성장코치', role:'성장 코치',            color:'#f59e0b', img:'coach',      desc:'업무 습관·목표 관리·우선순위를 도와요.' },
+  { name:'이커머스', role:'이커머스 운영 담당',    color:'#f43f5e', img:'ecommerce',  desc:'스마트스토어·쿠팡 운영을 정리해요.' },
+  { name:'비서',     role:'비서 (이미지 기획)',   color:'#d946ef', img:'assistant',  desc:'이미지 기획안(장면·문구·구도)을 글로 써요.' }
 ];
 CREW.forEach(function(p, idx){ p.serial = ('0' + (idx+1)).slice(-2); });
 var GRID_CREW = CREW.filter(function(p){ return p.name !== '총괄AI'; });
@@ -1109,24 +1244,38 @@ var GRID_CREW = CREW.filter(function(p){ return p.name !== '총괄AI'; });
    히어로에서 "이미 일하고 있다"를 보여주는 자리. 6명만 띄운다 — 12명을 다 세우면
    표가 길어져 헤드라인과 무게를 다투고, 요점은 명부가 아니라 '가동 중'이라는 사실이다. */
 (function(){
-  var rowsEl = document.getElementById('shiftRows');
-  var clockEl = document.getElementById('shiftClock');
-  if(!rowsEl || !clockEl) return;
+  /* 히어로 조직도 — 업무 한 줄이 팀장을 거쳐 네 단계로 갈라지는 그림.
+     단계 이름은 실제로 이 제품이 일을 쪼개는 방식 그대로다(조사 → 작성 → 이미지 → 검수). */
+  var leadEl = document.getElementById('orgLead');
+  var rowEl = document.getElementById('orgRow');
+  var clockEl = document.getElementById('orgClock');
+  if(!leadEl || !rowEl || !clockEl) return;
 
-  var shown = GRID_CREW.slice(0, 6);
-  var working = [0, 2, 4]; // 처음에 '작업 중'으로 보일 자리
+  var by = function(name){ return CREW.filter(function(c){ return c.name === name; })[0]; };
+  var lead = by('총괄AI');
+  var STEPS = [
+    { step:'조사',   who:by('전략기획') },
+    { step:'작성',   who:by('카피라이터') },
+    { step:'이미지', who:by('비서') },
+    { step:'검수',   who:by('SNS콘텐츠') }
+  ].filter(function(x){ return x.who; });
+  if(!lead || STEPS.length !== 4) return;
 
+  leadEl.innerHTML = BIBI.character(lead, { compact:true, cls:'bibi', label:'팀장 비비' })
+    + '<span class="org-tag">팀장</span>';
+
+  var working = [0, 2];   // 처음에 '작업 중'으로 보일 자리
   function tick(){
     var d = new Date();
     clockEl.textContent = ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2) + ' KST';
   }
   function render(justIdx){
-    rowsEl.innerHTML = shown.map(function(p, i){
+    rowEl.innerHTML = STEPS.map(function(x, i){
       var on = working.indexOf(i) >= 0;
-      return '<div class="shiftrow">'
-        + '<span class="id">' + p.serial + '</span>'
-        + '<span class="who">' + esc(p.role) + '</span>'
-        + '<span class="st ' + (on ? 'on' : 'done') + (i === justIdx ? ' just' : '') + '">'
+      return '<div class="org-mem">'
+        + BIBI.character(x.who, { compact:true, cls:'bibi', label:x.step + ' 담당 ' + x.who.role })
+        + '<span class="org-step">' + esc(x.step) + '</span>'
+        + '<span class="org-state ' + (on ? 'on' : 'wait') + (i === justIdx ? ' just' : '') + '">'
         +   (on ? '작업 중' : '대기') + '</span></div>';
     }).join('');
   }
@@ -1135,7 +1284,7 @@ var GRID_CREW = CREW.filter(function(p){ return p.name !== '총괄AI'; });
   setInterval(tick, 30000);
   // 한 명씩 상태를 바꿔 '돌아가고 있다'는 것만 알린다. 계속 깜빡이면 읽기를 방해한다.
   setInterval(function(){
-    var i = Math.floor(Math.random() * shown.length);
+    var i = Math.floor(Math.random() * STEPS.length);
     var at = working.indexOf(i);
     if(at >= 0) working.splice(at, 1); else working.push(i);
     render(i);
@@ -1161,9 +1310,170 @@ function goTo(id){
   if(id === 'screen5'){ renderCardnewsHistory(); loadQueue(); loadSchedule(); loadTiktok(); loadYoutube(); loadWordpress(); }
   if(id === 'screen6') loadRevenue();
   if(id === 'screen7'){ loadVideoStatus(); loadSmartstore(); }
+  if(id === 'screen8') loadInstagram();
 }
 function enterApp(){
   if(me){ goTo('screen2'); } else { document.getElementById('authOverlay').classList.add('show'); }
+}
+
+/* ══════ 인스타 키우기 ══════ */
+/* 이 파일에는 공용 요청 헬퍼가 없고 raw fetch를 쓴다. CSRF 토큰은 전역에서 fetch를
+   가로채 붙여 주므로 여기서는 신경 쓰지 않는다. */
+function igApi(url, body, method){
+  var init = { method: method || (body ? 'POST' : 'GET') };
+  if(body){ init.headers = { 'Content-Type':'application/json' }; init.body = JSON.stringify(body); }
+  return fetch(url, init).then(function(r){
+    return r.json().catch(function(){ return {}; }).then(function(d){
+      if(!r.ok) throw new Error(d.error || ('요청 실패 (' + r.status + ')'));
+      return d;
+    });
+  });
+}
+
+var igState = { connected:false, target:null, posts:[], growth:[], cost:{ cardnews:30, reels:45 } };
+
+(function initIgSelects(){
+  var wk = document.getElementById('igPerWeek');
+  var hr = document.getElementById('igHour');
+  if(!wk || !hr) return;
+  for(var i=1;i<=14;i++) wk.add(new Option(i + '개', i));
+  for(var h=0;h<24;h++) hr.add(new Option(('0'+h).slice(-2) + ':00', h));
+  var rg = document.getElementById('igRatio');
+  rg.oninput = function(){
+    document.getElementById('igRatioTxt').textContent = '릴스 ' + rg.value + '%';
+    renderIgCost();
+  };
+  wk.onchange = renderIgCost;
+})();
+
+/* 이번 계획에 들 크레딧을 미리 보여준다. 릴스가 더 비싸므로 비율을 바꾸면 같이 움직인다. */
+function renderIgCost(){
+  var el = document.getElementById('igCost');
+  if(!el) return;
+  var n = parseInt(document.getElementById('igPerWeek').value, 10) || 0;
+  var r = parseInt(document.getElementById('igRatio').value, 10) || 0;
+  var reels = Math.round(n * r / 100), cards = n - reels;
+  var total = reels * igState.cost.reels + cards * igState.cost.cardnews;
+  el.textContent = n ? ('주 ' + n + '개 = 카드뉴스 ' + cards + ' + 릴스 ' + reels + ' · 약 ' + total + ' 크레딧') : '';
+}
+
+function renderIgTarget(t){
+  document.getElementById('igTopic').value = t.topic || '';
+  document.getElementById('igAudience').value = t.audience || '';
+  document.getElementById('igTone').value = t.tone || '친근함';
+  document.getElementById('igHashtags').value = t.hashtags || '';
+  document.getElementById('igPerWeek').value = t.postsPerWeek || 5;
+  document.getElementById('igHour').value = t.hour == null ? 19 : t.hour;
+  document.getElementById('igRatio').value = t.reelRatio == null ? 40 : t.reelRatio;
+  document.getElementById('igRatioTxt').textContent = '릴스 ' + document.getElementById('igRatio').value + '%';
+  document.getElementById('igEnabled').checked = !!t.enabled;
+  renderIgCost();
+
+  /* 연결이 안 돼 있으면 무엇이 필요한지 정확히 적는다. 인스타는 개인 계정으로는
+     API 발행이 안 되므로, 켜기 전에 알아야 헛수고를 안 한다. */
+  var w = document.getElementById('igWarn');
+  if(igState.connected){ w.style.display = 'none'; return; }
+  w.style.display = 'block';
+  w.innerHTML = '<b>아직 인스타그램 계정이 연결되지 않았어요.</b><br>'
+    + '자동 발행에는 <b>비즈니스 또는 크리에이터 계정</b>과 페이스북 페이지 연결이 필요합니다 '
+    + '(개인 계정은 인스타그램이 API 발행을 막아 둡니다). 연결 전에도 콘텐츠 계획은 만들어 둘 수 있어요.';
+}
+
+function renderIgGrowth(g){
+  var f = document.getElementById('igFollowers'), d = document.getElementById('igDelta');
+  var sp = document.getElementById('igSpark'), note = document.getElementById('igGrowthNote');
+  if(!g.length){
+    f.textContent = '—'; d.textContent = ''; sp.innerHTML = '';
+    note.textContent = '계정을 연결하고 새로고침하면 팔로워 추이가 쌓입니다.';
+    return;
+  }
+  var last = g[g.length-1], first = g[0];
+  f.textContent = last.followers.toLocaleString();
+  var diff = last.followers - first.followers;
+  d.className = 'd ' + (diff > 0 ? 'up' : 'flat');
+  d.textContent = g.length > 1 ? ((diff >= 0 ? '+' : '') + diff + ' (' + g.length + '일)') : '';
+  var max = Math.max.apply(null, g.map(function(x){ return x.followers; })) || 1;
+  var min = Math.min.apply(null, g.map(function(x){ return x.followers; }));
+  var span = Math.max(1, max - min);
+  sp.innerHTML = g.map(function(x, i){
+    // 최솟값도 보이도록 바닥을 12%로 깔아준다
+    var h = 12 + Math.round((x.followers - min) / span * 88);
+    return '<i class="' + (i === g.length-1 ? 'on' : '') + '" style="height:' + h + '%" title="'
+      + x.date + ' · ' + x.followers + '명"></i>';
+  }).join('');
+  note.textContent = first.date + ' → ' + last.date;
+}
+
+function renderIgPosts(posts){
+  var box = document.getElementById('igPosts');
+  if(!posts.length){ box.innerHTML = '<div class="ig-empty">아직 계획된 게시물이 없어요.</div>'; return; }
+  var LABEL = { planned:'예정', posting:'올리는 중', done:'올림', failed:'실패', skipped:'건너뜀' };
+  box.innerHTML = posts.map(function(x){
+    var removable = x.status === 'planned' || x.status === 'failed';
+    return '<div class="ig-post">'
+      + '<span class="ig-kind ' + x.kind + '">' + (x.kind === 'reels' ? '릴스' : '카드뉴스') + '</span>'
+      + '<span class="tx"><span class="hk">' + esc(x.hook || x.title) + '</span>'
+      +   '<span class="wh">' + esc(x.scheduledFor) + ':00'
+      +   (x.error ? ' · ' + esc(x.error) : '') + '</span></span>'
+      + '<span class="st ' + x.status + '">' + (LABEL[x.status] || x.status) + '</span>'
+      + (removable ? '<button class="rm" data-del="' + esc(x.id) + '" title="빼기">×</button>' : '')
+      + '</div>';
+  }).join('');
+  box.querySelectorAll('[data-del]').forEach(function(b){
+    b.onclick = function(){ delIgPost(b.getAttribute('data-del')); };
+  });
+}
+
+function applyIg(d){
+  igState = { connected:!!d.connected, target:d.target, posts:d.posts||[],
+              growth:d.growth||[], cost:d.cost||igState.cost };
+  renderIgTarget(d.target || {});
+  renderIgGrowth(igState.growth);
+  renderIgPosts(igState.posts);
+}
+
+function loadInstagram(){
+  igApi('/api/instagram/overview').then(applyIg).catch(function(e){ console.warn(e); });
+}
+
+document.getElementById('igSaveBtn').onclick = function(){
+  var btn = this; btn.disabled = true;
+  igApi('/api/instagram/target', {
+    topic: document.getElementById('igTopic').value,
+    audience: document.getElementById('igAudience').value,
+    tone: document.getElementById('igTone').value,
+    hashtags: document.getElementById('igHashtags').value,
+    postsPerWeek: document.getElementById('igPerWeek').value,
+    reelRatio: document.getElementById('igRatio').value,
+    hour: document.getElementById('igHour').value,
+    enabled: document.getElementById('igEnabled').checked
+  }).then(function(){ celebrate('타깃을 저장했어요'); loadInstagram(); })
+    .catch(function(e){ alert(e.message); })
+    .then(function(){ btn.disabled = false; });
+};
+
+document.getElementById('igPlanBtn').onclick = function(){
+  var btn = this, old = btn.textContent;
+  btn.disabled = true; btn.textContent = '만드는 중…';
+  igApi('/api/instagram/plan', {}).then(function(d){
+    celebrate(d.added + '개를 계획에 넣었어요');
+    igState.posts = d.posts; renderIgPosts(d.posts);
+  }).catch(function(e){ alert(e.message); })
+    .then(function(){ btn.disabled = false; btn.textContent = old; });
+};
+
+document.getElementById('igSyncBtn').onclick = function(){
+  var btn = this; btn.disabled = true;
+  igApi('/api/instagram/sync', {}).then(function(d){
+    igState.growth = d.growth; renderIgGrowth(d.growth);
+  }).catch(function(e){ alert(e.message); })
+    .then(function(){ btn.disabled = false; });
+};
+
+function delIgPost(id){
+  igApi('/api/instagram/posts/' + encodeURIComponent(id), null, 'DELETE')
+    .then(function(d){ igState.posts = d.posts; renderIgPosts(d.posts); })
+    .catch(function(e){ alert(e.message); });
 }
 
 /* ══════ 사이드바 ══════ */
@@ -1177,7 +1487,8 @@ var SB_ICONS = {
   gear:'<path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>',
   back:'<path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>',
   money:'<path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/>',
-  video:'<path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/>'
+  video:'<path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/>',
+  insta:'<rect x="3" y="3" width="18" height="18" rx="5" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="17.2" cy="6.8" r="1.2"/>'
 };
 function ic(name,size){ return '<svg width="'+(size||20)+'" height="'+(size||20)+'" viewBox="0 0 24 24" fill="currentColor">'+SB_ICONS[name]+'</svg>'; }
 function buildSidebars(){
@@ -1191,7 +1502,8 @@ function buildSidebars(){
       +   '<div class="sb-icon" data-act="onbo" title="사용법">' + ic('bolt') + '</div>'
       +   '<div class="sb-icon' + (cur==='stats'?' active':'') + '" data-go="screen4" title="업무 현황">' + ic('list') + '</div>'
       +   '<div class="sb-icon' + (cur==='brain'?' active':'') + '" data-go="screen3" title="브레인 AI">' + ic('brain') + '</div>'
-      +   '<div class="sb-icon' + (cur==='cardnews'?' active':'') + '" data-go="screen5" title="카드뉴스 자동생성">' + ic('cardnews') + '<span class="sb-badge on" style="background:var(--green);">N</span></div>'
+      +   '<div class="sb-icon' + (cur==='insta'?' active':'') + '" data-go="screen8" title="인스타 키우기">' + ic('insta') + '<span class="sb-badge on" style="background:var(--green);">N</span></div>'
+      +   '<div class="sb-icon' + (cur==='cardnews'?' active':'') + '" data-go="screen5" title="카드뉴스 자동생성">' + ic('cardnews') + '</div>'
       +   '<div class="sb-icon' + (cur==='video'?' active':'') + '" data-go="screen7" title="숏폼 영상">' + ic('video') + '</div>'
       +   '<div class="sb-icon' + (cur==='revenue'?' active':'') + '" data-go="screen6" title="수익 현황">' + ic('money') + '</div>'
       +   '<div class="sb-icon" data-act="feed" title="진행 과정">' + ic('chat') + '<span class="sb-badge"></span></div>'
@@ -1230,59 +1542,13 @@ function tint(hex, a){
   return 'rgba('+r+','+g+','+b+','+a+')';
 }
 
-/* ══════ 사원증 — 비비 13명의 모델 디자인 ══════
-   설정상 비비는 모두 같은 얼굴이고 임무만 다르다. 그래서 개체별 초상화가 아니라
-   같은 규격으로 발급된 신분증으로 그린다. 카드 모양(오른쪽 아래 모서리를 자른 출입증),
-   내부 격자, 획 굵기 1.75는 13장이 전부 동일하다 — 다른 건 임무 픽토그램과 사번뿐이다.
-   그 "동일함"이 세트로 보이게 만드는 유일한 장치다. */
-var CARD_CLIP = 'M0,14 A14,14 0 0 1 14,0 L86,0 A14,14 0 0 1 100,14 L100,68 L68,100 L14,100 A14,14 0 0 1 0,86 Z';
-var CARD_EDGE = 'M1,14.5 A13.5,13.5 0 0 1 14.5,1 L85.5,1 A13.5,13.5 0 0 1 99,14.5 L99,67.6 L67.6,99 L14.5,99 A13.5,13.5 0 0 1 1,85.5 Z';
-var CARD_GRID = 'M12.5 0V100M25 0V100M37.5 0V100M50 0V100M62.5 0V100M75 0V100M87.5 0V100'
-              + 'M0 12.5H100M0 25H100M0 37.5H100M0 50H100M0 62.5H100M0 75H100M0 87.5H100';
-
-/* 임무 픽토그램 — 전부 24×24 격자, 획 1.75, 둥근 끝. 규격을 공유해야 세트가 된다. */
-var AGENT_GLYPH = {
-  strategy:   '<circle cx="12" cy="12" r="8"/><path d="M15.2 8.8l-1.7 4.7-4.7 1.7 1.7-4.7z"/>',
-  finance:    '<path d="M3.5 19.5h17"/><path d="M8 16.5V12"/><path d="M12 16.5V8.5"/><path d="M16 16.5V5.5"/>',
-  seo:        '<circle cx="10.5" cy="10.5" r="6"/><path d="M14.9 14.9l4.6 4.6"/><path d="M7.8 11.6l2-2.3 1.7 1.4 2.2-2.7"/>',
-  cs:         '<rect x="3.5" y="5" width="17" height="11" rx="2.5"/><path d="M8 16v3.2l3.6-3.2"/><path d="M8.6 10.5h.01M12 10.5h.01M15.4 10.5h.01"/>',
-  sales:      '<path d="M3.6 5.2h16.8l-6.6 7.7v6.1l-3.6-2.2v-3.9z"/>',
-  hiring:     '<circle cx="9.5" cy="8.5" r="3.4"/><path d="M3.5 19.2c0-3.3 2.7-5.6 6-5.6s6 2.3 6 5.6"/><path d="M18.8 6.2v5M16.3 8.7h5"/>',
-  manager:    '<path d="M12 3.2l7.2 3v5.6c0 4.2-3 6.9-7.2 8-4.2-1.1-7.2-3.8-7.2-8V6.2z"/><path d="M8.9 12.1l2.2 2.2 4.2-4.5"/>',
-  sns:        '<circle cx="17.6" cy="6.6" r="2.6"/><circle cx="17.6" cy="17.4" r="2.6"/><circle cx="6.4" cy="12" r="2.6"/><path d="M8.8 10.9l6.4-3.2M8.8 13.1l6.4 3.2"/>',
-  copywriter: '<path d="M4.4 5.6h5.6v6.4c0 3.6-2.1 5.9-5.6 6.6"/><path d="M13.4 5.6H19v6.4c0 3.6-2.1 5.9-5.6 6.6"/>',
-  email:      '<rect x="3.2" y="5.6" width="17.6" height="12.8" rx="2.2"/><path d="M4.2 7.4l7.8 5.7 7.8-5.7"/>',
-  coach:      '<path d="M3.5 19.5h4.4v-4.2h4.4v-4.2h4.4V7.2"/><circle cx="16.7" cy="4.8" r="2.4"/>',
-  ecommerce:  '<path d="M12 3.6l8 3.9v8.9L12 20.4 4 16.4V7.5z"/><path d="M4 7.5l8 4 8-4M12 11.5v8.9"/>',
-  assistant:  '<rect x="3.4" y="5" width="17.2" height="14" rx="2.4"/><path d="M4.2 16.4l4.2-4.2 3.2 3.2 3.4-3.9 5 5.3"/><circle cx="8.6" cy="9.6" r="1.4"/>'
-};
-
-var _markSeq = 0;
-/* opts.compact — 픽토그램만. 카드 틀과 사번은 24px 이하에서 뭉개지므로 그때는 뺀다. */
+/* 비비 캐릭터는 /bibi.js에서 그린다. 이 파일이 이미 2700줄이라 캐릭터까지 넣으면 더 못 읽는다. */
 function agentMark(p, opts){
-  opts = opts || {};
-  var glyph = AGENT_GLYPH[p.img] || AGENT_GLYPH.manager;
-  var c = p.color;
-  var cls = opts.cls || 'p-badge';
-  var label = '비비-' + p.serial + ' ' + p.role;
-  var stroke = '<g fill="none" stroke="' + c + '" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' + glyph + '</g>';
-  if(opts.compact){
-    return '<svg class="' + cls + '" viewBox="0 0 24 24" role="img" aria-label="' + esc(label) + '">' + stroke + '</svg>';
-  }
-  /* clipPath id는 인스턴스마다 새로 매긴다. 같은 비비가 카드·프로필에 동시에 뜨므로
-     사번으로 만들면 문서 안에 같은 id가 두 개 생긴다. */
-  var uid = 'nxc' + (++_markSeq);
-  return '<svg class="' + cls + '" viewBox="0 0 100 100" role="img" aria-label="' + esc(label) + '">'
-    + '<defs><clipPath id="' + uid + '"><path d="' + CARD_CLIP + '"/></clipPath></defs>'
-    + '<g clip-path="url(#' + uid + ')">'
-    +   '<rect width="100" height="100" fill="' + tint(c, .09) + '"/>'
-    +   '<path class="gr" d="' + CARD_GRID + '" fill="none" stroke="' + tint(c, .15) + '" stroke-width="1"/>'
-    + '</g>'
-    + '<path d="' + CARD_EDGE + '" fill="none" stroke="' + tint(c, .32) + '" stroke-width="1.5"/>'
-    + '<g transform="translate(24 15) scale(2.17)" fill="none" stroke="' + c + '"'
-    +   ' stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' + glyph + '</g>'
-    + '<text class="sn" x="13.5" y="86" font-size="11.5" letter-spacing="1.1" fill="' + tint(c, .6) + '">NX-' + p.serial + '</text>'
-    + '</svg>';
+  /* 카드·프로필의 크기 규칙은 .p-badge에 걸려 있다. 클래스를 안 넘기면 캐릭터가
+     기본 SVG 크기로 떠버리므로 여기서 기본값을 채운다. */
+  var o = {}; for(var k in (opts || {})) o[k] = opts[k];
+  if(!o.cls) o.cls = 'p-badge';
+  return BIBI.character(p, o);
 }
 
 function buildCards(){
@@ -1329,7 +1595,7 @@ function buildManagerBar(){
   card.setAttribute('data-key', p.name);
   card.title = p.desc;
   card.innerHTML =
-    agentMark(p)
+    agentMark(p, { compact:true })
     + '<div class="mb-info">'
     +   '<div class="cname">비비-' + p.serial + ' · 총괄AI</div>'
     +   '<div class="crole">' + esc(p.role) + ' — ' + esc(p.desc) + '</div>'
