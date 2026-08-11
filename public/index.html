@@ -850,7 +850,7 @@
       <div id="cnImportStatus" style="display:none;margin-top:14px;padding:12px;border-radius:var(--r-1);background:var(--bg);">
         <div style="font-size:13px;font-weight:700;margin-bottom:6px;">가져온 상품</div>
         <div style="display:flex;gap:10px;align-items:center;">
-          <img id="cnImportImg" src="" alt="" style="width:52px;height:52px;object-fit:cover;border-radius:8px;background:#eee;">
+          <img id="cnImportImg" alt="" hidden style="width:52px;height:52px;object-fit:cover;border-radius:8px;background:#eee;">
           <div style="flex:1;">
             <div id="cnImportName" style="font-size:13.5px;font-weight:600;"></div>
             <div id="cnImportPrice" style="font-size:12.5px;color:var(--soft);"></div>
@@ -2054,7 +2054,10 @@ function applyBookmarkletImport(){
     var json = decodeURIComponent(escape(atob(decodeURIComponent(raw))));
     var data = JSON.parse(json);
     document.getElementById('cnImportStatus').style.display = 'block';
-    document.getElementById('cnImportImg').src = data.image || '';
+    /* src=""는 브라우저가 현재 주소를 이미지로 받아 깨진 이미지로 남긴다. 주소가 있을 때만 붙인다. */
+    var cnImg = document.getElementById('cnImportImg');
+    if(data.image){ cnImg.src = data.image; cnImg.hidden = false; }
+    else { cnImg.removeAttribute('src'); cnImg.hidden = true; }
     document.getElementById('cnImportName').textContent = data.name || '(상품명을 못 읽었어요)';
     document.getElementById('cnImportPrice').textContent = data.price ? (Number(data.price).toLocaleString()+'원') : '가격을 못 읽었어요 — 직접 확인해 주세요';
     document.getElementById('cnImportStatus').dataset.name = data.name || '';
