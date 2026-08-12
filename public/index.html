@@ -108,7 +108,7 @@
     font-size:13px; color:rgba(255,255,255,.92); margin-bottom:14px; }
   .org-task .qm{ font-family:var(--f-data); font-size:11px; color:rgba(255,255,255,.42); }
   .org-lead{ display:flex; flex-direction:column; align-items:center; }
-  .org-lead .bibi{ width:96px; height:86px; }
+  .org-lead .bibi{ width:84px; height:84px; border-radius:20px; display:block; object-fit:cover; }
   .org-tag{ font-family:var(--f-display); font-size:11.5px; font-weight:600; letter-spacing:.02em;
     color:#fff; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18);
     border-radius:999px; padding:3px 11px; margin-top:2px; white-space:nowrap; }
@@ -116,7 +116,7 @@
   .org-fan{ display:block; width:100%; height:38px; }
   .org-row{ display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
   .org-mem{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; }
-  .org-mem .bibi{ width:62px; height:70px; }
+  .org-mem .bibi{ width:58px; height:58px; border-radius:14px; display:block; object-fit:cover; }
   .org-step{ font-size:12px; color:rgba(255,255,255,.9); font-weight:600; }
   .org-state{ font-family:var(--f-data); font-size:9.5px; letter-spacing:.02em; padding:2px 7px;
     border-radius:999px; white-space:nowrap; }
@@ -213,7 +213,7 @@
   .ai-card.manager-bar{ flex-direction:row; align-items:center; padding:13px 16px; gap:15px;
     cursor:default; margin-bottom:18px; background:#fff; border-color:#d5d1fb; }
   .ai-card.manager-bar:hover{ transform:none; box-shadow:var(--sh-1); }
-  .ai-card.manager-bar .p-badge{ width:52px; height:62px; flex-shrink:0; }
+  .ai-card.manager-bar .p-badge{ width:56px; height:56px; border-radius:var(--r-3); flex-shrink:0; }
   .ai-card.manager-bar .mb-info{ flex:1; min-width:0; }
   .ai-card.manager-bar .cname{ font-size:15px; }
   .ai-card.manager-bar .crole{ margin-top:2px; }
@@ -236,7 +236,7 @@
   .card-grid.mode-slide .ai-card{ flex:0 0 320px; scroll-snap-align:center; }
   @media(max-width:640px){ .card-grid.mode-slide .ai-card{ flex:0 0 84%; } }
   .mode-slide .portrait{ height:228px; }
-  .mode-slide .p-badge{ width:200px; height:180px; }
+  .mode-slide .p-badge{ width:170px; height:170px; border-radius:32px; }
   .navarrow{ position:absolute; top:120px; z-index:6; width:42px; height:42px; border-radius:50%;
     background:#fff; border:1px solid var(--line); box-shadow:var(--sh-2);
     font-size:24px; line-height:1; color:var(--ink); display:flex; align-items:center; justify-content:center;
@@ -267,13 +267,15 @@
   .ai-card.locked .pickmark{ display:none; }
   .lockbadge{ position:absolute; top:11px; right:11px; z-index:3; font-size:9.5px; font-weight:700;
     color:var(--soft); background:#f3f4f6; border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
-  .portrait{ position:relative; height:150px; overflow:hidden; background:#fff;
+  .portrait{ position:relative; height:158px; overflow:hidden;
+    background:linear-gradient(180deg,var(--tint),#fff 92%);
     display:flex; align-items:center; justify-content:center; }
-  .p-badge{ width:126px; height:113px; display:block; transition:transform .25s; }
+  .p-badge{ width:112px; height:112px; border-radius:var(--r-4); display:block; object-fit:cover;
+    transition:transform .25s; box-shadow:0 8px 20px -10px var(--rc); }
   .ai-card:hover .p-badge{ transform:translateY(-3px); }
   @keyframes botwork{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
   .ai-card.st-work .p-badge,.ai-card.st-think .p-badge{ animation:botwork 1.6s ease-in-out infinite; }
-  .ai-card:not(.selected) .p-badge{ filter:grayscale(.85); opacity:.55; }
+  .ai-card:not(.selected) .p-badge{ filter:grayscale(.6); opacity:.65; }
   .cbody{ padding:11px 13px 13px; }
   .cname{ font-family:var(--f-data); font-size:12.5px; font-weight:600; letter-spacing:-.01em; }
   .crole{ font-size:11.5px; color:var(--soft); margin-top:1px; line-height:1.35; }
@@ -296,10 +298,11 @@
     animation:slidebar 1.15s linear infinite; }
 
   /* 프로필 모달 */
-  .prof-hero{ height:200px; border-radius:var(--r-2); overflow:hidden; position:relative;
-    background:var(--bg); border:1px solid var(--line); margin-bottom:14px;
+  .prof-hero{ height:210px; border-radius:var(--r-2); overflow:hidden; position:relative;
+    background:linear-gradient(180deg,var(--tint),#fff 92%); margin-bottom:14px;
     display:flex; align-items:center; justify-content:center; }
-  .p-badge-lg{ width:186px; height:167px; display:block; }
+  .p-badge-lg{ width:168px; height:168px; border-radius:var(--r-4); display:block; object-fit:cover;
+    box-shadow:0 12px 26px -12px var(--rc); }
   .prof-name{ font-size:20px; font-weight:800; }
   .prof-role{ font-size:13px; color:var(--soft); margin-top:2px; }
   .prof-desc{ font-size:13.5px; margin:12px 0 4px; line-height:1.6; }
@@ -475,8 +478,22 @@
   .auth-card input:focus{ outline:none; border-color:var(--purple); background:#fff; }
   .auth-card .mainbtn{ width:100%; margin-top:18px; padding:13px; border:none; border-radius:var(--r-2);
     background:var(--purple); color:#fff; font-weight:700; font-size:15px; cursor:pointer; }
-  .auth-card .guestbtn{ width:100%; margin-top:8px; padding:12px; border:1.5px solid var(--line); border-radius:var(--r-2);
-    background:#fff; color:var(--purple); font-weight:700; font-size:14px; cursor:pointer; }
+  /* 간편가입 — 각 서비스의 고유 색을 쓴다. 버튼을 우리 색으로 칠하면 어느 계정으로
+     들어가는지 순간적으로 안 읽힌다. */
+  .auth-oauth{ display:flex; flex-direction:column; gap:8px; margin-top:14px; }
+  .oauth-btn{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%;
+    padding:12px; border-radius:var(--r-2); font-weight:700; font-size:14px; cursor:pointer;
+    border:1px solid var(--line); background:#fff; color:#1f2937; text-decoration:none; }
+  .oauth-btn:hover{ background:#f7f8fa; }
+  .oauth-btn.kakao{ background:#fee500; border-color:#fee500; color:#191600; }
+  .oauth-btn.kakao:hover{ background:#f2d900; }
+  .oauth-btn svg{ width:17px; height:17px; flex-shrink:0; }
+  .auth-or{ display:flex; align-items:center; gap:10px; margin:16px 0 4px;
+    font-size:11.5px; color:var(--soft); }
+  .auth-or::before, .auth-or::after{ content:''; flex:1; height:1px; background:var(--line); }
+  .auth-remember{ display:flex; align-items:center; gap:7px; margin-top:12px;
+    font-size:13px; color:var(--soft); cursor:pointer; }
+  .auth-remember input{ width:auto; margin:0; }
   .auth-switch{ text-align:center; margin-top:14px; font-size:13px; color:var(--soft); }
   .auth-switch a{ color:var(--purple); font-weight:700; cursor:pointer; text-decoration:underline; }
   .auth-err{ background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; border-radius:var(--r-1);
@@ -567,6 +584,56 @@
   .ig-post .rm:hover{ background:#f1f3f8; color:var(--red); }
   .ig-empty{ color:var(--soft); font-size:13.5px; text-align:center; padding:30px 0; }
 
+  /* ══════ SCREEN 9 — 관리자 ══════ */
+  #screen9 .main-content{ background:var(--bg); }
+  .ad-tabs{ display:flex; gap:6px; margin-bottom:18px; flex-wrap:wrap; }
+  .ad-tab{ padding:8px 15px; border-radius:999px; border:1px solid var(--line); background:#fff;
+    font-size:13px; font-weight:600; color:var(--soft); cursor:pointer; }
+  .ad-tab.on{ background:var(--ink); border-color:var(--ink); color:#fff; }
+  .ad-pane{ display:none; } .ad-pane.on{ display:block; }
+  .ad-cards{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:20px; }
+  .ad-card{ background:#fff; border:1px solid var(--line); border-radius:var(--r-2); padding:14px 16px; }
+  .ad-card .v{ font-family:var(--f-data); font-variant-numeric:tabular-nums; font-size:24px;
+    font-weight:600; color:var(--ink); }
+  .ad-card .l{ font-size:11.5px; color:var(--soft); margin-top:3px; }
+  .ad-box{ background:#fff; border:1px solid var(--line); border-radius:var(--r-3); padding:16px 18px; margin-bottom:16px; }
+  .ad-box h3{ font-family:var(--f-display); font-size:15px; font-weight:700; margin-bottom:12px; }
+  .ad-row{ display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--line); font-size:13px; }
+  .ad-row:first-of-type{ border-top:none; }
+  .ad-row .g{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .ad-row .t{ font-family:var(--f-data); font-size:11px; color:var(--soft); flex-shrink:0; }
+  /* 실제 지시문 — 여기가 "어떻게 쓰는지"를 알려주는 유일한 자리다 */
+  .ad-q{ padding:10px 0; border-top:1px solid var(--line); }
+  .ad-q:first-of-type{ border-top:none; }
+  .ad-q .qq{ font-size:13.5px; line-height:1.5; }
+  .ad-q .qm{ font-family:var(--f-data); font-size:10.5px; color:var(--soft); margin-top:4px; }
+  .ad-q .qm .bad{ color:var(--red); }
+  .ad-bar{ display:flex; align-items:center; gap:9px; padding:6px 0; font-size:12.5px; }
+  .ad-bar .nm{ width:88px; flex-shrink:0; }
+  .ad-bar .tr{ flex:1; height:8px; background:var(--bg); border-radius:99px; overflow:hidden; }
+  .ad-bar .tr i{ display:block; height:100%; background:var(--purple); border-radius:99px; }
+  .ad-bar .ct{ font-family:var(--f-data); font-size:11.5px; color:var(--soft); width:34px; text-align:right; }
+  .ad-note{ font-size:11.5px; color:var(--soft); line-height:1.6; margin-top:10px; }
+
+  /* ══════ 설명서 ══════ */
+  .guide-btn{ border:1px solid var(--line); background:#fff; border-radius:999px; padding:4px 12px;
+    font-size:12px; font-weight:700; color:var(--purple); cursor:pointer; }
+  .guide-btn:hover{ background:var(--wash); }
+  .guide-body{ padding:4px 2px; }
+  .guide-step{ display:flex; gap:13px; padding:14px 0; border-top:1px solid var(--line); }
+  .guide-step:first-child{ border-top:none; padding-top:4px; }
+  .guide-step .no{ flex:0 0 25px; height:25px; background:var(--purple); color:#fff; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-family:var(--f-data);
+    font-size:12px; font-weight:600; }
+  .guide-step .bd{ flex:1; }
+  .guide-step b{ display:block; font-size:14px; margin-bottom:4px; }
+  .guide-step p{ font-size:13px; color:#4b5563; line-height:1.65; }
+  .guide-step p + p{ margin-top:6px; }
+  .guide-warn{ background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; border-radius:var(--r-1);
+    padding:12px 14px; font-size:12.5px; line-height:1.7; margin-top:14px; }
+  .guide-warn b{ font-weight:700; }
+  .guide-warn ol{ margin:8px 0 0 18px; } .guide-warn li{ margin-bottom:4px; }
+
   /* 법적 문서 링크(랜딩 하단) */
   .landing-legal{ position:relative; z-index:10; text-align:center; padding:14px 0 22px; }
   .landing-legal a{ color:rgba(255,255,255,.55); font-size:12px; text-decoration:none; margin:0 10px; }
@@ -610,7 +677,6 @@
       </div>
       <div class="hero-cta">
         <button class="btn-pill" style="font-size:15px;padding:13px 26px;" onclick="enterApp()">넥스타 시작하기</button>
-        <button class="btn-pill ghost" style="font-size:15px;padding:13px 22px;" onclick="enterApp()">먼저 둘러보기</button>
       </div>
     </div>
 
@@ -885,13 +951,65 @@
   </div>
 </div>
 
+<!-- ══════ SCREEN 9 — 관리자 ══════ -->
+<div id="screen9" class="screen app-layout">
+  <aside class="sidebar" data-sb="admin"></aside>
+  <div class="main-content">
+    <h1 class="dashboard-title">관리자</h1>
+    <div class="ad-tabs">
+      <button class="ad-tab on" data-pane="adUse">사용 현황</button>
+      <button class="ad-tab" data-pane="adOps">운영</button>
+      <button class="ad-tab" data-pane="adIp">가입 IP</button>
+    </div>
+
+    <div class="ad-pane on" id="adUse">
+      <div class="ad-cards" id="adStatCards"></div>
+      <div class="ad-box">
+        <h3>사용자들이 무엇을 시켰나</h3>
+        <div id="adQuestions"><div class="ig-empty">아직 기록이 없어요.</div></div>
+        <div class="ad-note">실제 지시문입니다. 숫자만으로는 늘었는지만 알 수 있고,
+          무엇에 쓰는지는 이걸 봐야 알 수 있어요.</div>
+      </div>
+      <div class="ad-box">
+        <h3>어떤 비비를 많이 쓰나</h3>
+        <div id="adAgents"><div class="ig-empty">아직 기록이 없어요.</div></div>
+      </div>
+      <div class="ad-box">
+        <h3>최근 가입</h3>
+        <div id="adSignups"><div class="ig-empty">아직 없어요.</div></div>
+      </div>
+    </div>
+
+    <div class="ad-pane" id="adOps">
+      <div class="ad-box">
+        <h3>무통장입금 대기</h3>
+        <div id="adOrders"><div class="ig-empty">대기 중인 입금이 없어요.</div></div>
+      </div>
+      <div class="ad-box">
+        <h3>추천 코드</h3>
+        <div id="adReferrals"><div class="ig-empty">코드가 없어요.</div></div>
+      </div>
+    </div>
+
+    <div class="ad-pane" id="adIp">
+      <div class="ad-box">
+        <h3>가입 IP <span id="adIpMode" class="ad-row t"></span></h3>
+        <div id="adIpList"><div class="ig-empty">기록이 없어요.</div></div>
+        <div class="ad-note">한 회선당 계정 하나 규칙에 쓰입니다. 회사·학교·통신사 공용 IP(CGNAT)에서는
+          정상 사용자가 막힐 수 있어요. 문의가 오면 해당 IP를 여기서 풀어 주세요.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══════ SCREEN 8 — 인스타 키우기 ══════ -->
 <div id="screen8" class="screen app-layout">
   <aside class="sidebar" data-sb="insta"></aside>
   <div class="main-content">
     <h1 class="dashboard-title">인스타 키우기</h1>
     <p style="text-align:center;color:var(--soft);font-size:13.5px;margin:-8px 0 22px;">
-      누구에게 보일지만 정하면, 비비가 카드뉴스와 릴스를 만들어 정해진 시각에 올립니다.</p>
+      누구에게 보일지만 정하면, 비비가 카드뉴스와 릴스를 만들어 정해진 시각에 올립니다.
+      <button class="guide-btn" id="igGuideBtn" style="margin-left:6px;">설명서</button></p>
 
     <div class="ig-grid">
       <!-- 왼쪽: 타깃 -->
@@ -1184,14 +1302,70 @@
     <label for="authEmail">이메일</label>
     <input id="authEmail" type="email" autocomplete="username" placeholder="you@example.com">
     <label for="authPw">비밀번호</label>
-    <input id="authPw" type="password" autocomplete="current-password" placeholder="6자 이상">
+    <input id="authPw" type="password" autocomplete="current-password" placeholder="8자 이상">
+    <label class="auth-remember"><input type="checkbox" id="authRemember"> 아이디 저장</label>
     <div class="auth-err" id="authErr"></div>
     <button class="mainbtn" id="authBtn">로그인</button>
-    <button class="guestbtn" id="guestBtn">로그인 없이 둘러보기</button>
+
+    <div class="auth-or" id="authOr" style="display:none;">또는</div>
+    <div class="auth-oauth" id="authOauth"></div>
     <div class="auth-switch" id="authSwitch">계정이 없으신가요? <a id="authToggle">회원가입</a></div>
     <div class="auth-note" id="authBonus">지금 가입하면 무료 크레딧 300을 드립니다.</div>
     <div class="auth-legal">
       <a href="/terms.html" target="_blank" rel="noopener">이용약관</a>·<a href="/privacy.html" target="_blank" rel="noopener">개인정보처리방침</a>
+    </div>
+  </div>
+</div>
+
+<!-- 인스타 키우기 설명서 -->
+<div class="modal-overlay" id="igGuideOverlay">
+  <div class="modal-box" style="max-width:600px;">
+    <div class="modal-head">
+      <span class="panel-title">인스타 키우기 · 설명서</span>
+      <button class="btn-sm" id="igGuideClose">닫기</button>
+    </div>
+    <div style="padding:18px 20px 22px; overflow-y:auto;">
+      <div class="guide-body">
+        <div class="guide-step"><span class="no">1</span><span class="bd">
+          <b>타깃을 정합니다</b>
+          <p>계정 주제와 <b>보여줄 대상</b>을 적어 주세요. 이 두 줄이 앞으로 만들어지는 모든 글의 기준이 됩니다.</p>
+          <p>“재테크”보다 “월급 모으기 시작한 사회초년생”처럼 좁게 적을수록 저장·공유가 잘 되는 글이 나옵니다.</p>
+        </span></div>
+
+        <div class="guide-step"><span class="no">2</span><span class="bd">
+          <b>올릴 빈도와 시각을 고릅니다</b>
+          <p>주당 몇 개를, 몇 시에 올릴지 정합니다. 릴스 비율을 올리면 영상이 많아져요.</p>
+          <p>릴스는 카드뉴스 슬라이드를 세로 영상으로 엮어 만듭니다. 영상 API를 쓰지 않아 크레딧이 조금만 더 듭니다(카드뉴스 30 · 릴스 45).</p>
+        </span></div>
+
+        <div class="guide-step"><span class="no">3</span><span class="bd">
+          <b>이번 주 콘텐츠를 만듭니다</b>
+          <p>“이번 주 콘텐츠 만들기”를 누르면 타깃에 맞는 글감이 <b>예정 목록</b>에 쌓입니다. 이 단계에서는 아직 크레딧이 빠지지 않아요.</p>
+          <p>마음에 안 드는 건 × 로 빼면 됩니다. 실제 이미지·영상은 올릴 시각이 됐을 때 만들어지고, 그때 크레딧이 빠집니다.</p>
+        </span></div>
+
+        <div class="guide-step"><span class="no">4</span><span class="bd">
+          <b>자동 발행을 켭니다</b>
+          <p>켜 두면 정해진 시각마다 하나씩 만들어 인스타그램에 올립니다. 크레딧이 부족하거나 계정 연결이 풀리면 그날은 건너뛰고 사유를 남겨요.</p>
+        </span></div>
+
+        <div class="guide-step"><span class="no">5</span><span class="bd">
+          <b>팔로워가 쌓이는 걸 봅니다</b>
+          <p>“새로고침”을 누르면 그날의 팔로워 수가 기록됩니다. 하루 한 칸씩 쌓여 추이가 됩니다.</p>
+        </span></div>
+      </div>
+
+      <div class="guide-warn">
+        <b>시작하기 전에 — 인스타그램 계정 조건</b>
+        자동 발행은 인스타그램 공식 API로 올립니다. 그래서 아래 조건이 필요하고,
+        <b>개인 계정으로는 올릴 수 없습니다</b>(인스타그램이 막아 둡니다).
+        <ol>
+          <li>인스타그램 계정을 <b>비즈니스</b> 또는 <b>크리에이터</b>로 전환</li>
+          <li>페이스북 <b>페이지</b>를 만들어 그 계정과 연결</li>
+          <li>메타 개발자 앱에서 콘텐츠 게시 권한 검수 통과</li>
+        </ol>
+        조건이 갖춰지기 전에도 <b>타깃 설정과 콘텐츠 계획은 미리</b> 만들어 둘 수 있어요.
+      </div>
     </div>
   </div>
 </div>
@@ -1261,7 +1435,7 @@ var GRID_CREW = CREW.filter(function(p){ return p.name !== '총괄AI'; });
   ].filter(function(x){ return x.who; });
   if(!lead || STEPS.length !== 4) return;
 
-  leadEl.innerHTML = BIBI.character(lead, { compact:true, cls:'bibi', label:'팀장 비비' })
+  leadEl.innerHTML = '<img class="bibi" src="/assets/char-' + lead.img + '.png" alt="팀장 비비">'
     + '<span class="org-tag">팀장</span>';
 
   var working = [0, 2];   // 처음에 '작업 중'으로 보일 자리
@@ -1273,7 +1447,7 @@ var GRID_CREW = CREW.filter(function(p){ return p.name !== '총괄AI'; });
     rowEl.innerHTML = STEPS.map(function(x, i){
       var on = working.indexOf(i) >= 0;
       return '<div class="org-mem">'
-        + BIBI.character(x.who, { compact:true, cls:'bibi', label:x.step + ' 담당 ' + x.who.role })
+        + '<img class="bibi" src="/assets/char-' + x.who.img + '.png" alt="' + esc(x.step) + ' 담당 ' + esc(x.who.role) + '">'
         + '<span class="org-step">' + esc(x.step) + '</span>'
         + '<span class="org-state ' + (on ? 'on' : 'wait') + (i === justIdx ? ' just' : '') + '">'
         +   (on ? '작업 중' : '대기') + '</span></div>';
@@ -1311,10 +1485,212 @@ function goTo(id){
   if(id === 'screen6') loadRevenue();
   if(id === 'screen7'){ loadVideoStatus(); loadSmartstore(); }
   if(id === 'screen8') loadInstagram();
+  if(id === 'screen9') loadAdmin();
 }
 function enterApp(){
   if(me){ goTo('screen2'); } else { document.getElementById('authOverlay').classList.add('show'); }
 }
+
+/* ══════ 인스타 설명서 ══════ */
+(function(){
+  var open = document.getElementById('igGuideBtn');
+  var close = document.getElementById('igGuideClose');
+  var ov = document.getElementById('igGuideOverlay');
+  if(!open || !ov) return;
+  open.onclick = function(){ ov.classList.add('open'); };
+  close.onclick = function(){ ov.classList.remove('open'); };
+  ov.onclick = function(e){ if(e.target === ov) ov.classList.remove('open'); };
+})();
+
+/* ══════ 관리자 ══════ */
+var isAdmin = false;
+
+/* 관리자 항목은 권한이 있을 때만 보인다. 숨기는 것만으로 보호되지는 않지만
+   (서버가 막는다), 없는 메뉴를 보여줄 이유도 없다. */
+function refreshAdminNav(){
+  fetch('/api/admin/me').then(function(r){ return r.json(); }).then(function(d){
+    isAdmin = !!d.admin;
+    document.querySelectorAll('.sb-icon.admin-only').forEach(function(el){
+      el.style.display = isAdmin ? 'flex' : 'none';
+    });
+  }).catch(function(){});
+}
+
+(function initAdminTabs(){
+  document.querySelectorAll('.ad-tab').forEach(function(t){
+    t.onclick = function(){
+      document.querySelectorAll('.ad-tab').forEach(function(x){ x.classList.remove('on'); });
+      document.querySelectorAll('.ad-pane').forEach(function(x){ x.classList.remove('on'); });
+      t.classList.add('on');
+      document.getElementById(t.getAttribute('data-pane')).classList.add('on');
+    };
+  });
+})();
+
+function adEmpty(msg){ return '<div class="ig-empty">' + esc(msg) + '</div>'; }
+
+function renderAdminInsight(d){
+  var u = d.users || {}, jobs = d.jobStats || [];
+  var byStatus = {};
+  jobs.forEach(function(j){ byStatus[j.status] = j.count; });
+  var done = byStatus.done || 0, failed = byStatus.failed || 0;
+  var cards = [
+    { v: u.total || 0,   l: '전체 회원' },
+    { v: u.real || u.total || 0, l: '정식 가입' },
+    { v: done,           l: '완료된 업무 (' + d.days + '일)' },
+    { v: failed,         l: '실패한 업무' },
+    { v: (d.subscriptions && d.subscriptions.active) || 0, l: '구독 중' }
+  ];
+  document.getElementById('adStatCards').innerHTML = cards.map(function(c){
+    return '<div class="ad-card"><div class="v">' + c.v + '</div><div class="l">' + esc(c.l) + '</div></div>';
+  }).join('');
+
+  var qs = d.recentQuestions || [];
+  document.getElementById('adQuestions').innerHTML = qs.length ? qs.map(function(q){
+    var bad = q.status === 'failed';
+    return '<div class="ad-q"><div class="qq">' + esc(q.question || '(내용 없음)') + '</div>'
+      + '<div class="qm">' + esc(String(q.created_at || '').slice(0, 16))
+      + ' · <span class="' + (bad ? 'bad' : '') + '">' + esc(q.status || '') + '</span>'
+      + (bad && q.error_message ? ' · ' + esc(String(q.error_message).slice(0, 60)) : '')
+      + '</div></div>';
+  }).join('') : adEmpty('아직 기록이 없어요.');
+
+  var ag = (d.agentPopularity || []).slice(0, 12);
+  var max = Math.max.apply(null, ag.map(function(a){ return a.count || 0; }).concat([1]));
+  document.getElementById('adAgents').innerHTML = ag.length ? ag.map(function(a){
+    return '<div class="ad-bar"><span class="nm">' + esc(a.agent || a.name || '') + '</span>'
+      + '<span class="tr"><i style="width:' + Math.round((a.count / max) * 100) + '%"></i></span>'
+      + '<span class="ct">' + (a.count || 0) + '</span></div>';
+  }).join('') : adEmpty('아직 기록이 없어요.');
+
+  var su = d.recentSignups || [];
+  document.getElementById('adSignups').innerHTML = su.length ? su.map(function(x){
+    return '<div class="ad-row"><span class="g">' + esc(x.email || '(이메일 없음)') + '</span>'
+      + '<span class="t">크레딧 ' + (x.credits || 0) + '</span>'
+      + '<span class="t">' + esc(String(x.createdAt || '').slice(0, 16)) + '</span></div>';
+  }).join('') : adEmpty('아직 없어요.');
+}
+
+function renderAdminIp(d){
+  document.getElementById('adIpMode').textContent = d.enabled ? '· 제한 켜짐' : '· 제한 꺼짐';
+  var ips = d.ips || [];
+  document.getElementById('adIpList').innerHTML = ips.length ? ips.map(function(x){
+    return '<div class="ad-row"><span class="g" style="font-family:var(--f-data);font-size:12px;">' + esc(x.ip) + '</span>'
+      + '<span class="t">' + esc(x.email || '') + '</span>'
+      + '<span class="t">' + esc(String(x.createdAt || '').slice(0, 10)) + '</span>'
+      + '<button class="btn-sm" data-freeip="' + esc(x.ip) + '">풀기</button></div>';
+  }).join('') : adEmpty('기록이 없어요.');
+
+  document.querySelectorAll('[data-freeip]').forEach(function(b){
+    b.onclick = function(){
+      var ip = b.getAttribute('data-freeip');
+      if(!confirm(ip + ' 의 가입 제한을 풀까요? 이 회선에서 계정을 하나 더 만들 수 있게 됩니다.')) return;
+      igApi('/api/admin/ip/' + encodeURIComponent(ip), null, 'DELETE')
+        .then(renderAdminIp).catch(function(e){ alert(e.message); });
+    };
+  });
+}
+
+function renderAdminOps(orders, refs){
+  var o = (orders && orders.orders) || [];
+  document.getElementById('adOrders').innerHTML = o.length ? o.map(function(x){
+    return '<div class="ad-row"><span class="g">' + esc(x.email || x.userId || '') + '</span>'
+      + '<span class="t">' + (x.amount || 0).toLocaleString() + '원</span>'
+      + '<button class="btn-sm pri" data-okorder="' + esc(x.orderId) + '">입금 확인</button>'
+      + '<button class="btn-sm" data-noorder="' + esc(x.orderId) + '">거절</button></div>';
+  }).join('') : adEmpty('대기 중인 입금이 없어요.');
+
+  document.querySelectorAll('[data-okorder]').forEach(function(b){
+    b.onclick = function(){
+      if(!confirm('입금을 확인 처리할까요? 크레딧이 즉시 지급됩니다.')) return;
+      igApi('/api/admin/bank-orders/' + encodeURIComponent(b.getAttribute('data-okorder')) + '/confirm', {})
+        .then(function(){ celebrate('입금 확인 완료'); loadAdmin(); })
+        .catch(function(e){ alert(e.message); });
+    };
+  });
+  document.querySelectorAll('[data-noorder]').forEach(function(b){
+    b.onclick = function(){
+      if(!confirm('이 주문을 거절할까요?')) return;
+      igApi('/api/admin/bank-orders/' + encodeURIComponent(b.getAttribute('data-noorder')) + '/reject', {})
+        .then(function(){ loadAdmin(); }).catch(function(e){ alert(e.message); });
+    };
+  });
+
+  var codes = (refs && refs.codes) || [];
+  document.getElementById('adReferrals').innerHTML = codes.length ? codes.map(function(c){
+    return '<div class="ad-row"><span class="g" style="font-family:var(--f-data);">' + esc(c.code || '') + '</span>'
+      + '<span class="t">' + esc(c.label || '') + '</span></div>';
+  }).join('') : adEmpty('코드가 없어요.');
+}
+
+function loadAdmin(){
+  igApi('/api/admin/insight?days=7').then(renderAdminInsight).catch(function(e){
+    document.getElementById('adStatCards').innerHTML = adEmpty(e.message);
+  });
+  igApi('/api/admin/ip').then(renderAdminIp).catch(function(){});
+  Promise.all([
+    igApi('/api/admin/bank-orders').catch(function(){ return {}; }),
+    igApi('/api/admin/referrals').catch(function(){ return {}; })
+  ]).then(function(r){ renderAdminOps(r[0], r[1]); });
+}
+
+/* ══════ 로그인 편의 ══════ */
+var REMEMBER_KEY = 'nexta_saved_email';
+
+/* 아이디 저장 — 비밀번호는 절대 저장하지 않는다. 저장하는 건 이메일 한 줄뿐이고,
+   그것도 이 브라우저 안에만 남는다. */
+(function restoreSavedEmail(){
+  try {
+    var saved = localStorage.getItem(REMEMBER_KEY);
+    if(!saved) return;
+    var em = document.getElementById('authEmail');
+    var cb = document.getElementById('authRemember');
+    if(em) em.value = saved;
+    if(cb) cb.checked = true;
+    // 이메일이 이미 차 있으면 비밀번호 칸으로 바로 보낸다
+    var pw = document.getElementById('authPw');
+    if(pw) setTimeout(function(){ pw.focus(); }, 60);
+  } catch(e){ /* 사생활 보호 모드에서는 localStorage가 막힌다 — 그냥 넘어간다 */ }
+})();
+
+function saveEmailIfWanted(){
+  try {
+    var cb = document.getElementById('authRemember');
+    var em = document.getElementById('authEmail');
+    if(cb && cb.checked && em) localStorage.setItem(REMEMBER_KEY, em.value.trim());
+    else localStorage.removeItem(REMEMBER_KEY);
+  } catch(e){}
+}
+
+/* 간편가입 버튼은 서버에 키가 설정된 것만 띄운다. 눌렀는데 "설정되지 않았습니다"가
+   뜨는 것보다 아예 안 보이는 편이 낫다. */
+var OAUTH_MARK = {
+  google: '<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M23 12.3c0-.9-.1-1.5-.2-2.2H12v4h6.3c-.1 1-.8 2.6-2.3 3.6l3.5 2.7c2.1-1.9 3.5-4.8 3.5-8.1z"/><path fill="#34A853" d="M12 23.5c3.1 0 5.7-1 7.6-2.8l-3.6-2.8c-1 .7-2.3 1.1-4 1.1-3 0-5.6-2-6.5-4.8l-3.7 2.9C3.7 20.8 7.5 23.5 12 23.5z"/><path fill="#FBBC05" d="M5.5 14.2c-.2-.7-.4-1.4-.4-2.2s.1-1.5.4-2.2L1.8 6.9C1 8.4.5 10.1.5 12s.5 3.6 1.3 5.1l3.7-2.9z"/><path fill="#EA4335" d="M12 5c2.1 0 3.6.9 4.4 1.7l3.2-3.1C17.7 1.8 15.1.5 12 .5 7.5.5 3.7 3.2 1.8 6.9l3.7 2.9C6.4 7 9 5 12 5z"/></svg>',
+  kakao:  '<svg viewBox="0 0 24 24"><path fill="#191600" d="M12 3C6.9 3 2.8 6.2 2.8 10.2c0 2.6 1.7 4.8 4.3 6.1-.2.7-.7 2.5-.8 2.9-.1.5.2.5.4.4.2-.1 2.7-1.8 3.8-2.6.5.1 1 .1 1.5.1 5.1 0 9.2-3.2 9.2-7.2S17.1 3 12 3z"/></svg>'
+};
+(function loadOauthButtons(){
+  var box = document.getElementById('authOauth');
+  if(!box) return;
+  fetch('/api/auth/providers').then(function(r){ return r.json(); }).then(function(d){
+    var html = '';
+    if(d.google) html += '<a class="oauth-btn" href="/api/auth/google">' + OAUTH_MARK.google + '구글로 계속하기</a>';
+    if(d.kakao)  html += '<a class="oauth-btn kakao" href="/api/auth/kakao">' + OAUTH_MARK.kakao + '카카오로 계속하기</a>';
+    box.innerHTML = html;
+    document.getElementById('authOr').style.display = html ? 'flex' : 'none';
+  }).catch(function(){});
+})();
+
+/* 소셜 로그인은 페이지를 떠났다 돌아오므로, 결과를 주소창에 실어 보낸다. */
+(function showOauthResult(){
+  var q = new URLSearchParams(location.search);
+  var err = q.get('auth_error');
+  if(err){
+    var box = document.getElementById('authErr');
+    if(box){ box.textContent = err; box.style.display = 'block'; }
+    document.getElementById('authOverlay').classList.add('show');
+  }
+  if(err || q.get('auth')) history.replaceState(null, '', location.pathname);
+})();
 
 /* ══════ 인스타 키우기 ══════ */
 /* 이 파일에는 공용 요청 헬퍼가 없고 raw fetch를 쓴다. CSRF 토큰은 전역에서 fetch를
@@ -1488,6 +1864,7 @@ var SB_ICONS = {
   back:'<path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>',
   money:'<path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/>',
   video:'<path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/>',
+  shield:'<path d="M12 2l8 3.4v6.2c0 4.7-3.4 7.7-8 8.9-4.6-1.2-8-4.2-8-8.9V5.4z" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M8.9 12.1l2.2 2.2 4.4-4.7" fill="none" stroke="currentColor" stroke-width="1.9"/>',
   insta:'<rect x="3" y="3" width="18" height="18" rx="5" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="17.2" cy="6.8" r="1.2"/>'
 };
 function ic(name,size){ return '<svg width="'+(size||20)+'" height="'+(size||20)+'" viewBox="0 0 24 24" fill="currentColor">'+SB_ICONS[name]+'</svg>'; }
@@ -1507,6 +1884,7 @@ function buildSidebars(){
       +   '<div class="sb-icon' + (cur==='video'?' active':'') + '" data-go="screen7" title="숏폼 영상">' + ic('video') + '</div>'
       +   '<div class="sb-icon' + (cur==='revenue'?' active':'') + '" data-go="screen6" title="수익 현황">' + ic('money') + '</div>'
       +   '<div class="sb-icon" data-act="feed" title="진행 과정">' + ic('chat') + '<span class="sb-badge"></span></div>'
+      +   '<div class="sb-icon admin-only' + (cur==='admin'?' active':'') + '" data-go="screen9" title="관리자" style="display:none;">' + ic('shield') + '</div>'
       + '</div>'
       + '<div class="sidebar-bottom">'
       +   '<div class="sb-purple-btn" data-act="new" title="새 업무">＋</div>'
@@ -1542,13 +1920,12 @@ function tint(hex, a){
   return 'rgba('+r+','+g+','+b+','+a+')';
 }
 
-/* 비비 캐릭터는 /bibi.js에서 그린다. 이 파일이 이미 2700줄이라 캐릭터까지 넣으면 더 못 읽는다. */
 function agentMark(p, opts){
-  /* 카드·프로필의 크기 규칙은 .p-badge에 걸려 있다. 클래스를 안 넘기면 캐릭터가
-     기본 SVG 크기로 떠버리므로 여기서 기본값을 채운다. */
-  var o = {}; for(var k in (opts || {})) o[k] = opts[k];
-  if(!o.cls) o.cls = 'p-badge';
-  return BIBI.character(p, o);
+  /* 화면 전체가 일러스트(/assets/char-*.png) 하나로 통일돼 있다.
+     코드로 그린 로봇 버전은 /bibi.js에 그대로 두었다 — 쓰려면 아래 한 줄을
+     BIBI.character(p, opts)로 바꾸면 13명이 전부 로봇으로 바뀐다. */
+  var cls = (opts && opts.cls) || 'p-badge';
+  return '<img class="' + cls + '" src="/assets/char-' + p.img + '.png" alt="비비-' + p.serial + ' ' + esc(p.role) + '">';
 }
 
 function buildCards(){
@@ -1595,7 +1972,7 @@ function buildManagerBar(){
   card.setAttribute('data-key', p.name);
   card.title = p.desc;
   card.innerHTML =
-    agentMark(p, { compact:true })
+    agentMark(p)
     + '<div class="mb-info">'
     +   '<div class="cname">비비-' + p.serial + ' · 총괄AI</div>'
     +   '<div class="crole">' + esc(p.role) + ' — ' + esc(p.desc) + '</div>'
@@ -3101,25 +3478,18 @@ document.getElementById('authBtn').onclick=function(){
   .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,d:d}; }); })
   .then(function(res){
     if(!res.ok){ errEl.textContent=res.d.error||'문제가 발생했습니다.'; errEl.style.display='block'; return; }
+    saveEmailIfWanted();
     afterLogin(res.d.user);
   })
   .catch(function(){ errEl.textContent='연결에 실패했습니다.'; errEl.style.display='block'; });
 };
-document.getElementById('guestBtn').onclick=function(){
-  var errEl=document.getElementById('authErr'); errEl.style.display='none';
-  fetch('/api/guest',{method:'POST'}).then(function(r){ return r.json(); })
-    .then(function(res){
-      if(!res.user){ errEl.textContent='체험 입장에 실패했습니다.'; errEl.style.display='block'; return; }
-      afterLogin(res.user);
-    })
-    .catch(function(){ errEl.textContent='연결에 실패했습니다.'; errEl.style.display='block'; });
-};
+
 function checkAuth(){
   fetch('/api/me').then(function(r){ if(!r.ok) throw 0; return r.json(); })
     .then(function(d){
       COST.perAgent=d.costPerAgent; COST.manager=d.costManager;
       renderCredits(d.user); updateCostEst(); goTo('screen2'); maybeAskCompany(); loadSubscriptionConfig(); loadBankTransferConfig();
-      applyBookmarkletImport();
+      applyBookmarkletImport(); refreshAdminNav();
     })
     .catch(function(){ goTo('screen1'); });
 }

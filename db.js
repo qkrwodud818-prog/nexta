@@ -17,9 +17,10 @@ const path = require("path");
 const fs = require("fs");
 const Database = require("better-sqlite3");
 
-const DATA_DIR = path.join(__dirname, "data");
-fs.mkdirSync(DATA_DIR, { recursive: true });
-const db = new Database(path.join(DATA_DIR, "nexta.db"));
+/* 경로를 고정하면 테스트가 실제 DB에 쓰게 된다. DB_PATH로 갈아끼울 수 있게 둔다. */
+const DB_FILE = process.env.DB_PATH || path.join(__dirname, "data", "nexta.db");
+fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+const db = new Database(DB_FILE);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
@@ -220,6 +221,26 @@ if (!userColumns.includes("access_until")) {
   db.exec("ALTER TABLE users ADD COLUMN access_until TEXT");
 }
 // orders 테이블에 무통장입금 지원 컬럼 추가 (기존 배포 DB 대비).
+/* 소셜 로그인 — 어디로 가입했는지. 'local' | 'google' | 'kakao'.
+   같은 이메일로 로컬 가입 후 구글 로그인을 하면 같은 계정으로 이어 붙인다. */
+if (!userColumns.includes("provider")) {
+  db.exec("ALTER TABLE users ADD COLUMN provider TEXT NOT NULL DEFAULT 'local'");
+}
+if (!userColumns.includes("provider_id")) {
+  db.exec("ALTER TABLE users ADD COLUMN provider_id TEXT");
+}
+
+/* 가입 IP — "IP당 계정 하나" 판정에 쓴다. 계정을 지워도 흔적이 남아야 우회를 막으므로
+   users를 참조하지 않는 별도 표로 둔다. */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS signup_ips (
+    ip TEXT PRIMARY KEY,
+    user_id TEXT,
+    email TEXT,
+    created_at TEXT NOT NULL
+  );
+`);
+
 const orderColumns = db.prepare("PRAGMA table_info(orders)").all().map((c) => c.name);
 if (!orderColumns.includes("method")) {
   db.exec("ALTER TABLE orders ADD COLUMN method TEXT NOT NULL DEFAULT 'toss'");
@@ -1375,6 +1396,41 @@ function listIgGrowth(userId, days) {
     .map((r) => ({ date: r.on_date, followers: r.followers, posts: r.posts }));
 }
 
+/* ────────────────────────── 인증 확장 ────────────────────────── */
+
+/** 이 IP로 이미 가입한 계정이 있나. 없으면 null. */
+function getSignupIp(ip) {
+  const r = db.prepare("SELECT * FROM signup_ips WHERE ip = ?").get(ip);
+  return r ? { ip: r.ip, userId: r.user_id, email: r.email, createdAt: r.created_at } : null;
+}
+/** 가입 시점에 IP를 찍는다. 이미 있으면 아무것도 하지 않는다(먼저 잡은 쪽이 임자). */
+function recordSignupIp(ip, userId, email) {
+  db.prepare(
+    "INSERT INTO signup_ips (ip, user_id, email, created_at) VALUES (?, ?, ?, ?)" +
+    " ON CONFLICT(ip) DO NOTHING"
+  ).run(ip, userId, email || "", new Date().toISOString());
+}
+/** 운영자가 풀어 주는 용도 — 회사·학교처럼 여럿이 한 IP를 쓰는 경우가 실제로 있다. */
+function releaseSignupIp(ip) {
+  return db.prepare("DELETE FROM signup_ips WHERE ip = ?").run(ip).changes;
+}
+function listSignupIps(limit) {
+  return db.prepare("SELECT * FROM signup_ips ORDER BY created_at DESC LIMIT ?")
+    .all(limit || 100)
+    .map((r) => ({ ip: r.ip, userId: r.user_id, email: r.email, createdAt: r.created_at }));
+}
+
+/** 소셜 로그인 — 공급자 계정 ID로 먼저 찾고, 없으면 이메일로 찾는다. */
+function getUserByProvider(provider, providerId) {
+  return hydrateUser(
+    db.prepare("SELECT * FROM users WHERE provider = ? AND provider_id = ?").get(provider, providerId)
+  );
+}
+/** 로컬로 가입한 계정에 소셜을 이어 붙인다. 같은 이메일이면 같은 사람으로 본다. */
+function linkProvider(userId, provider, providerId) {
+  db.prepare("UPDATE users SET provider = ?, provider_id = ? WHERE id = ?").run(provider, providerId, userId);
+}
+
 module.exports = {
   getSmartstoreAccount, upsertSmartstoreAccount, deleteSmartstoreAccount, markSmartstoreError,
   logVideoAttempt, getVideoServiceStats, getUserVideoCostThisMonth,
@@ -1387,6 +1443,8 @@ module.exports = {
   getDueIgPosts, markIgPost, claimIgPost, recordIgGrowth, listIgGrowth,
   addQueueItem, listQueue, countPendingQueue, nextPendingQueueItem, markQueueItem, deleteQueueItem,
   getSchedule, upsertSchedule, getDueSchedules, markScheduleRun,
+  getSignupIp, recordSignupIp, releaseSignupIp, listSignupIps,
+  getUserByProvider, linkProvider,
   getUserById, getUserByEmail, emailExists, createUser, updateCredits, updateCompany, setPromoOptout, setAccessUntil,
   addUsage, addCardnewsHistory,
   createOrder, getOrder, markOrderPaid, listPendingBankTransferOrders, rejectOrder,

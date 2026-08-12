@@ -336,7 +336,7 @@ function getOrCreateDeviceId(req, res) {
 // 브라우저 쿠키를 쓰지 않으므로 검사 대상에서 제외한다.
 // /api/admin/*은 쿠키 세션이 아니라 별도 비밀키(ADMIN_KEY)로 보호되므로 CSRF 대상이 아니다
 // (공격자 페이지가 그 키 값을 알 방법이 없어 위조 요청을 만들 수 없다).
-const CSRF_EXEMPT_PATHS = new Set(["/api/signup", "/api/login", "/api/guest", "/webhooks/instagram"]);
+const CSRF_EXEMPT_PATHS = new Set(["/api/signup", "/api/login", "/webhooks/instagram"]);
 function isCsrfExempt(path) {
   return CSRF_EXEMPT_PATHS.has(path) || path.indexOf("/api/admin/") === 0;
 }
@@ -1158,9 +1158,13 @@ app.post("/api/signup", (req, res) => {
   const email = String((req.body && req.body.email) || "").trim().toLowerCase();
   const password = String((req.body && req.body.password) || "");
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: "이메일 형식이 올바르지 않습니다." });
-  if (password.length < 6) return res.status(400).json({ error: "비밀번호는 6자 이상으로 정해 주세요." });
+  if (password.length < 8) return res.status(400).json({ error: "비밀번호는 8자 이상으로 정해 주세요." });
 
   if (db.emailExists(email)) return res.status(409).json({ error: "이미 가입된 이메일입니다." });
+
+  const ipTaken = ipAlreadyUsed(ip);
+  if (ipTaken) return res.status(409).json({ error: IP_TAKEN_MESSAGE });
+
   timestamps.push(now);
   signupLog.set(ip, timestamps);
 
@@ -1169,9 +1173,180 @@ app.post("/api/signup", (req, res) => {
   const refCode = parseCookies(req).vo_ref;
   const referredBy = refCode && db.referralCodeExists(refCode) ? refCode : null;
   const u = db.createUser({ id, email, salt, hash, credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, guest: false, createdAt: nowKR(), referredBy });
+  markSignupIp(ip, id, email);
   setSession(res, id);
   res.json({ ok: true, user: publicUser(u) });
 });
+
+/* ══════════════════════════════════════════════════════════════
+   IP당 계정 하나
+
+   주의: 회사·학교·PC방은 물론이고 한국 이동통신 3사는 여러 가입자가 같은 공인 IP를
+   나눠 쓴다(CGNAT). 그래서 이 규칙은 정상 사용자를 막을 수 있고, 실제로 막힌다.
+   그런 경우를 운영자가 풀어줄 수 있도록 해제 창구(/api/admin/ip)를 같이 뒀고,
+   환경변수 IP_LIMIT=off 로 통째로 끌 수도 있다.
+   ══════════════════════════════════════════════════════════════ */
+const IP_LIMIT_ON = String(process.env.IP_LIMIT || "on").toLowerCase() !== "off";
+const IP_TAKEN_MESSAGE =
+  "이 인터넷 회선에서는 이미 계정이 만들어졌습니다. 한 회선당 하나만 가입할 수 있어요. " +
+  "회사·학교·공용 와이파이라 막힌 것이라면 고객센터로 알려 주세요.";
+
+function ipAlreadyUsed(ip) {
+  if (!IP_LIMIT_ON || !ip || ip === "unknown") return false;
+  try { return !!db.getSignupIp(ip); } catch { return false; }
+}
+function markSignupIp(ip, userId, email) {
+  if (!IP_LIMIT_ON || !ip || ip === "unknown") return;
+  try { db.recordSignupIp(ip, userId, email); } catch (e) { console.warn("[가입 IP 기록 실패]", e.message); }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   간편가입 — 구글 · 카카오
+
+   둘 다 표준 OAuth 2.0 authorization code 흐름이다. 비밀번호를 우리가 받지 않으므로
+   가장 안전한 가입 경로이기도 하다. 키가 없으면 라우트는 그대로 두되 안내만 돌려준다 —
+   프론트가 버튼을 숨길지 판단할 수 있게 /api/auth/providers로 알려 준다.
+   ══════════════════════════════════════════════════════════════ */
+const OAUTH = {
+  google: {
+    label: "구글",
+    clientId: process.env.GOOGLE_CLIENT_ID || "",
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+    authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    tokenUrl: "https://oauth2.googleapis.com/token",
+    scope: "openid email profile",
+  },
+  kakao: {
+    label: "카카오",
+    clientId: process.env.KAKAO_CLIENT_ID || "",
+    clientSecret: process.env.KAKAO_CLIENT_SECRET || "", // 카카오는 선택(사용 안 함으로 둘 수 있다)
+    authUrl: "https://kauth.kakao.com/oauth/authorize",
+    tokenUrl: "https://kauth.kakao.com/oauth/token",
+    scope: "account_email",
+  },
+};
+const oauthRedirect = (provider) => PUBLIC_BASE_URL + "/api/auth/" + provider + "/callback";
+
+app.get("/api/auth/providers", (req, res) => {
+  res.json({
+    google: !!OAUTH.google.clientId,
+    kakao: !!OAUTH.kakao.clientId,
+  });
+});
+
+/* state — 남이 만든 콜백 링크로 사용자를 끌고 오는 공격(CSRF)을 막는다.
+   서버에 저장할 것도 없이, 쿠키에 심어 두고 콜백에서 같은 값인지만 본다. */
+function beginOAuth(req, res, provider) {
+  const cfg = OAUTH[provider];
+  if (!cfg || !cfg.clientId) return res.status(503).send("아직 " + (cfg ? cfg.label : provider) + " 로그인이 설정되지 않았습니다.");
+  const state = crypto.randomBytes(16).toString("hex");
+  addCookie(res, "vo_oauth=" + state + "; HttpOnly; Path=/; Max-Age=600; SameSite=Lax");
+  const q = new URLSearchParams({
+    client_id: cfg.clientId,
+    redirect_uri: oauthRedirect(provider),
+    response_type: "code",
+    scope: cfg.scope,
+    state,
+  });
+  res.redirect(cfg.authUrl + "?" + q.toString());
+}
+
+async function exchangeCode(provider, code) {
+  const cfg = OAUTH[provider];
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: cfg.clientId,
+    redirect_uri: oauthRedirect(provider),
+    code,
+  });
+  if (cfg.clientSecret) body.set("client_secret", cfg.clientSecret);
+  const r = await fetch(cfg.tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const data = await r.json();
+  if (!r.ok || !data.access_token) throw new Error("토큰 교환 실패: " + JSON.stringify(data).slice(0, 200));
+  return data.access_token;
+}
+
+/** 공급자에서 이메일과 계정 ID를 받아온다. 이메일이 없으면 계정을 만들 수 없다. */
+async function fetchOAuthProfile(provider, accessToken) {
+  if (provider === "google") {
+    const r = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+      headers: { Authorization: "Bearer " + accessToken },
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error("구글 프로필 조회 실패");
+    if (!d.email || d.email_verified === false) throw new Error("이메일이 확인되지 않은 구글 계정입니다.");
+    return { id: String(d.sub), email: String(d.email).toLowerCase() };
+  }
+  const r = await fetch("https://kapi.kakao.com/v2/user/me", {
+    headers: { Authorization: "Bearer " + accessToken },
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error("카카오 프로필 조회 실패");
+  const acc = d.kakao_account || {};
+  if (!acc.email) {
+    throw new Error("카카오 계정에서 이메일을 받지 못했습니다. 카카오 로그인 동의 항목에서 이메일을 켜 주세요.");
+  }
+  return { id: String(d.id), email: String(acc.email).toLowerCase() };
+}
+
+async function finishOAuth(req, res, provider) {
+  const cfg = OAUTH[provider];
+  const fail = (msg) =>
+    res.redirect("/?auth_error=" + encodeURIComponent(msg));
+
+  try {
+    const state = String(req.query.state || "");
+    const cookieState = parseCookies(req).vo_oauth || "";
+    if (!state || !cookieState || !timingSafeStringEqual(state, cookieState)) {
+      return fail("로그인 요청이 만료되었습니다. 다시 시도해 주세요.");
+    }
+    addCookie(res, "vo_oauth=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax");
+    if (req.query.error) return fail((cfg.label) + " 로그인이 취소되었습니다.");
+
+    const code = String(req.query.code || "");
+    if (!code) return fail("인증 코드를 받지 못했습니다.");
+
+    const token = await exchangeCode(provider, code);
+    const profile = await fetchOAuthProfile(provider, token);
+
+    // 1) 이미 같은 공급자로 가입한 계정
+    let u = db.getUserByProvider(provider, profile.id);
+    // 2) 같은 이메일로 로컬 가입한 계정이 있으면 이어 붙인다
+    if (!u) {
+      const byEmail = db.getUserByEmail(profile.email);
+      if (byEmail) { db.linkProvider(byEmail.id, provider, profile.id); u = db.getUserById(byEmail.id); }
+    }
+    // 3) 새 계정
+    if (!u) {
+      const ip = req.ip || "unknown";
+      if (ipAlreadyUsed(ip)) return fail(IP_TAKEN_MESSAGE);
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      const refCode = parseCookies(req).vo_ref;
+      const referredBy = refCode && db.referralCodeExists(refCode) ? refCode : null;
+      u = db.createUser({
+        id, email: profile.email, salt: "", hash: "",
+        credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, guest: false, createdAt: nowKR(), referredBy,
+      });
+      db.linkProvider(id, provider, profile.id);
+      markSignupIp(ip, id, profile.email);
+    }
+
+    setSession(res, u.id);
+    res.redirect("/?auth=" + provider);
+  } catch (e) {
+    console.error("[" + provider + " 로그인 실패]", e.message);
+    fail(e.message || "로그인에 실패했습니다.");
+  }
+}
+
+app.get("/api/auth/google", (req, res) => beginOAuth(req, res, "google"));
+app.get("/api/auth/google/callback", (req, res) => finishOAuth(req, res, "google"));
+app.get("/api/auth/kakao", (req, res) => beginOAuth(req, res, "kakao"));
+app.get("/api/auth/kakao/callback", (req, res) => finishOAuth(req, res, "kakao"));
 
 // 비밀번호 무차별 대입(brute force) 방지 — 같은 IP가 실패를 반복하면 잠깐 막는다.
 const LOGIN_FAIL_LIMIT = 10;
@@ -1212,46 +1387,8 @@ app.post("/api/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-// 로그인 없이 둘러보기 — 임시 체험 계정을 즉시 만들고 로그인 상태로 만든다.
-// (비밀번호가 없어 /api/login으로는 못 들어가고, 쿠키로만 유지된다)
-// 이중으로 막는다:
-//  1) 기기(브라우저) 기준 — 쿠키로 식별한 이 브라우저가 예전에 체험한 적 있으면 평생 재입장 불가.
-//     같은 집 다른 컴퓨터·같은 통신사 다른 사람처럼 IP만 같고 실제로는 다른 사람인 경우를
-//     오탐하지 않기 위한 1차 기준.
-//  2) IP 기준 — 기기 쿠키를 지우고 계속 새로 만드는 것까지 막는 상한선(하루 3개).
-const GUEST_LIMIT_PER_WINDOW = 3;
-const GUEST_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24시간
-const guestCreationLog = new Map(); // ip -> timestamps[]
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, timestamps] of guestCreationLog) {
-    const kept = timestamps.filter((t) => now - t < GUEST_LIMIT_WINDOW_MS);
-    if (kept.length) guestCreationLog.set(ip, kept);
-    else guestCreationLog.delete(ip);
-  }
-}, 30 * 60 * 1000);
-
-app.post("/api/guest", (req, res) => {
-  const deviceId = getOrCreateDeviceId(req, res);
-  if (db.hasGuestDevice(deviceId)) {
-    return res.status(429).json({ error: "이 브라우저에서는 이미 체험해 보셨습니다. 회원가입 후 계속 이용해 주세요." });
-  }
-
-  const ip = req.ip || "unknown";
-  const now = Date.now();
-  const timestamps = (guestCreationLog.get(ip) || []).filter((t) => now - t < GUEST_LIMIT_WINDOW_MS);
-  if (timestamps.length >= GUEST_LIMIT_PER_WINDOW) {
-    return res.status(429).json({ error: "체험 입장은 하루에 정해진 횟수만 가능합니다. 회원가입 후 이용해 주세요." });
-  }
-  timestamps.push(now);
-  guestCreationLog.set(ip, timestamps);
-
-  const id = "guest_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  const u = db.createUser({ id, email: "체험 사용자", credits: SIGNUP_BONUS, ceiling: SIGNUP_BONUS, guest: true, createdAt: nowKR() });
-  db.recordGuestDevice(deviceId, id, ip, nowKR());
-  setSession(res, id);
-  res.json({ ok: true, user: publicUser(u) });
-});
+/* 둘러보기(게스트 체험)는 없앴다. 크레딧이 실제 API 비용으로 나가는데 익명 계정은
+   IP만 바꾸면 무한히 만들 수 있어서, 막을 방법이 가입 절차밖에 없다. */
 
 app.get("/api/me", (req, res) => {
   const u = currentUser(req);
@@ -3266,12 +3403,76 @@ function timingSafeStringEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 function requireAdminKey(req, res, next) {
+  /* 관리자 계정으로 로그인해 있으면 키 없이 통과시킨다. 그래야 기존 관리자 기능을
+     주소창에 키를 붙이지 않고 브라우저 화면에서 그대로 쓸 수 있다.
+     curl로 쓰던 ADMIN_KEY 방식도 그대로 살려 둔다(자동화 스크립트가 있을 수 있으므로). */
+  if (isAdminUser(currentUser(req))) return next();
   const key = (req.query && req.query.key) || (req.body && req.body.key) || "";
   if (!ADMIN_KEY || !key || !timingSafeStringEqual(key, ADMIN_KEY)) {
-    return res.status(403).json({ error: "권한이 없습니다. (.env에 ADMIN_KEY를 설정했는지, key 값이 맞는지 확인)" });
+    return res.status(403).json({ error: "권한이 없습니다. 관리자 계정으로 로그인하거나 ADMIN_KEY를 확인해 주세요." });
   }
   next();
 }
+/* ══════════════════════════════════════════════════════════════
+   관리자 계정 — ADMIN_EMAILS에 적은 이메일로 로그인하면 관리자 화면이 열린다.
+
+   키를 주소에 싣지 않으므로 브라우저 기록·서버 로그·어깨너머로 새지 않는다.
+   이메일은 코드에 박지 않고 환경변수로 둔다 — 나중에 사람이 늘어도 배포가 필요 없고,
+   무엇보다 깃 저장소에 내 계정이 남지 않는다.
+   예) ADMIN_EMAILS=me@example.com,partner@example.com
+   ══════════════════════════════════════════════════════════════ */
+const ADMIN_EMAILS = new Set(
+  String(process.env.ADMIN_EMAILS || "")
+    .split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)
+);
+function isAdminUser(u) {
+  return !!(u && u.email && ADMIN_EMAILS.has(String(u.email).toLowerCase()));
+}
+function requireAdminUser(req, res, next) {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!isAdminUser(u)) return res.status(403).json({ error: "권한이 없습니다." });
+  req.adminUser = u;
+  next();
+}
+
+/** 프론트가 사이드바에 관리자 항목을 띄울지 판단하는 용도. */
+app.get("/api/admin/me", (req, res) => {
+  const u = currentUser(req);
+  res.json({ admin: isAdminUser(u), configured: ADMIN_EMAILS.size > 0 });
+});
+
+/* 사용 현황 — "사용자들이 넥스타를 어떻게 쓰고 있나".
+   숫자만 보면 늘었는지만 알 수 있고, 무엇을 시키는지는 실제 지시문을 봐야 안다. */
+app.get("/api/admin/insight", requireAdminUser, (req, res) => {
+  const days = Math.max(1, Math.min(90, parseInt(req.query.days, 10) || 7));
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const out = { days };
+  const safe = (fn, fallback) => { try { return fn(); } catch (e) { return fallback; } };
+
+  out.users = safe(() => db.getUserStats(), {});
+  out.recentSignups = safe(() => db.getRecentSignups(15), []);
+  out.jobStats = safe(() => db.getJobStats(since), []);
+  out.agentPopularity = safe(() => db.getAgentPopularity(since), []);
+  out.recentQuestions = safe(() => db.getRecentQuestions(40), []);
+  out.costByRole = safe(() => db.getCostSummaryByRole(since), []);
+  out.quality = safe(() => db.getQualityStats(since), {});
+  out.feedback = safe(() => db.getFeedbackStats(), {});
+  out.subscriptions = safe(() => db.getSubscriptionStats(), {});
+  res.json(out);
+});
+
+/* 가입 IP 관리.
+   IP당 1계정 규칙은 회사·학교·통신사 공용 IP(CGNAT)에서 정상 사용자를 막는다.
+   막힌 사람을 풀어 줄 창구가 없으면 그 사람은 그냥 떠난다. */
+app.get("/api/admin/ip", requireAdminUser, (req, res) => {
+  res.json({ enabled: IP_LIMIT_ON, ips: db.listSignupIps(200) });
+});
+app.delete("/api/admin/ip/:ip", requireAdminUser, (req, res) => {
+  const removed = db.releaseSignupIp(String(req.params.ip));
+  res.json({ ok: true, removed, ips: db.listSignupIps(200) });
+});
+
 app.get("/api/admin/referrals", requireAdminKey, (req, res) => {
   res.json({ codes: db.listReferralCodes(), stats: db.getReferralStats() });
 });
