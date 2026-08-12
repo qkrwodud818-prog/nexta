@@ -1943,8 +1943,80 @@ app.post("/api/instagram/target", (req, res) => {
   res.json({ ok: true, target: db.getIgTarget(u.id) });
 });
 
-/* 타깃 → 이번 주 올릴 것. 아이디어만 만들고 이미지는 아직 만들지 않는다.
-   미리 다 만들어두면 사용자가 계획을 지웠을 때 이미 쓴 크레딧을 돌려줄 수 없다. */
+/* ══════════════════════════════════════════════════════════════
+   콘텐츠 목적 — 모으는 콘텐츠(Attract) 3종 · 파는 콘텐츠(Convert) 2종
+
+   팔로워와 매출은 다른 것이라서, 콘텐츠도 "모으는 것"과 "파는 것"을 갈라 놓는다.
+   기본 배분은 4:1이다. 파는 글만 올리면 사람이 안 모이고, 모으는 글만 올리면
+   모여도 안 팔린다.
+   ══════════════════════════════════════════════════════════════ */
+const CONTENT_PURPOSES = {
+  attract_problem: { group: "attract", label: "문제해결", hint: "타겟이 겪는 불편을 짚고 해결 방법을 알려준다" },
+  attract_money:   { group: "attract", label: "수익정보", hint: "돈이 되는 정보·기회를 알려준다" },
+  attract_save:    { group: "attract", label: "절약정보", hint: "돈·시간을 아끼는 방법을 알려준다" },
+  convert_story:   { group: "convert", label: "스토리텔링", hint: "실제 사례나 변화 과정을 이야기로 풀어 신뢰를 만든다" },
+  convert_info:    { group: "convert", label: "정보가치입증", hint: "왜 이 사람에게 맡겨야 하는지를 근거로 보여준다" },
+};
+const ATTRACT_KEYS = Object.keys(CONTENT_PURPOSES).filter((k) => CONTENT_PURPOSES[k].group === "attract");
+const CONVERT_KEYS = Object.keys(CONTENT_PURPOSES).filter((k) => CONTENT_PURPOSES[k].group === "convert");
+const ATTRACT_RATIO = 0.8; // 4:1
+
+const MONETIZATION_TYPES = ["affiliate", "group_buy", "digital_product", "agency_lead", "ad_brand_deal"];
+
+/** n개를 4:1로 나눠 목적을 배정한다. 같은 목적만 몰리지 않게 종류를 돌려 쓴다. */
+function assignPurposes(n) {
+  const attractCount = Math.max(0, Math.min(n, Math.round(n * ATTRACT_RATIO)));
+  const out = [];
+  for (let k = 0; k < attractCount; k++) out.push(ATTRACT_KEYS[k % ATTRACT_KEYS.length]);
+  for (let k = 0; k < n - attractCount; k++) out.push(CONVERT_KEYS[k % CONVERT_KEYS.length]);
+  return out;
+}
+
+/* ── 타겟 페르소나 ─────────────────────────────────────────── */
+app.get("/api/persona", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  res.json({ active: db.getActivePersona(u.id), all: db.listPersonas(u.id), monetizationTypes: MONETIZATION_TYPES });
+});
+
+app.post("/api/persona", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const b = req.body || {};
+  const demographic = String(b.demographic || "").trim().slice(0, 120);
+  if (!demographic) return res.status(400).json({ error: "누구에게 팔 것인지 적어 주세요." });
+
+  const painPoints = (Array.isArray(b.painPoints) ? b.painPoints : [])
+    .map((x) => String(x).trim().slice(0, 80)).filter(Boolean).slice(0, 5);
+  if (!painPoints.length) return res.status(400).json({ error: "그 사람이 겪는 불편을 하나 이상 적어 주세요." });
+
+  const goals = (Array.isArray(b.monetizationGoals) ? b.monetizationGoals : [])
+    .filter((x) => MONETIZATION_TYPES.includes(x));
+
+  res.json({
+    ok: true,
+    persona: db.addPersona(u.id, {
+      id: crypto.randomBytes(6).toString("hex"),
+      demographic, painPoints, monetizationGoals: goals,
+      hasProduct: !!b.hasProduct,
+      productDescription: String(b.productDescription || "").trim().slice(0, 300),
+      faceReveal: !!b.faceReveal,
+    }),
+  });
+});
+
+app.post("/api/persona/:id/activate", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!db.activatePersona(u.id, String(req.params.id))) {
+    return res.status(404).json({ error: "그 타겟을 찾을 수 없습니다." });
+  }
+  res.json({ ok: true, active: db.getActivePersona(u.id) });
+});
+
+/* ── ⑥ 주제 발굴 + 계획 ────────────────────────────────────
+   아이디어만 만들고 이미지·영상은 아직 만들지 않는다. 미리 다 만들어두면
+   사용자가 계획을 지웠을 때 이미 쓴 크레딧을 돌려줄 수 없다. */
 app.post("/api/instagram/plan", async (req, res) => {
   const u = currentUser(req);
   if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
@@ -1958,41 +2030,192 @@ app.post("/api/instagram/plan", async (req, res) => {
   if (want <= 0) return res.status(400).json({ error: "계획된 게시물이 이미 충분합니다. 발행되거나 지운 뒤에 다시 만들어 주세요." });
 
   const reels = Math.round((want * t.reelRatio) / 100);
+  const purposes = assignPurposes(want);
+  const persona = db.getActivePersona(u.id);
+
+  /* 페르소나가 있으면 "누구에게"를 프롬프트 맨 앞에 놓는다. 무엇을 팔지보다 먼저다. */
+  const personaBlock = persona
+    ? "보여줄 사람: " + persona.demographic + "\n" +
+      "그 사람의 불편: " + persona.painPoints.join(", ") + "\n" +
+      (persona.hasProduct && persona.productDescription ? "파는 것: " + persona.productDescription + "\n" : "아직 파는 상품은 없다. 지금은 신뢰를 쌓는 단계다.\n")
+    : "";
+
+  const purposeBlock = purposes
+    .map((k, idx) => (idx + 1) + "번: " + CONTENT_PURPOSES[k].label + " — " + CONTENT_PURPOSES[k].hint)
+    .join("\n");
 
   const prompt =
     "너는 인스타그램 계정을 키우는 콘텐츠 기획자다.\n" +
+    personaBlock +
     "계정 주제: " + t.topic + "\n" +
-    "보여줄 대상: " + t.audience + "\n" +
     "말투: " + t.tone + "\n" +
     "만들 개수: " + want + "개 (이 중 " + reels + "개는 릴스, 나머지는 카드뉴스)\n\n" +
+    "아래 순서대로 각 번호에 맞는 목적의 글감을 하나씩 만든다:\n" + purposeBlock + "\n\n" +
     "대상이 저장하거나 공유할 만한 것만 만든다. 광고 문구, 과장, 근거 없는 수치는 쓰지 않는다.\n" +
     "hook은 첫 화면에 크게 들어갈 한 줄이라 18자를 넘기지 않는다.\n" +
     "bullets는 카드 본문에 들어갈 짧은 문장 3개.\n" +
     "caption은 인스타 본문(2~3문장) + 해시태그 5개.\n\n" +
-    'JSON만 출력한다: {"posts":[{"kind":"cardnews|reels","title":"내부 제목","hook":"첫 화면 한 줄","bullets":["","",""],"caption":"본문 + 해시태그"}]}';
+    "설명·인사말 없이 JSON만 출력한다: " +
+    '{"posts":[{"kind":"cardnews|reels","title":"내부 제목","hook":"첫 화면 한 줄","bullets":["","",""],"caption":"본문 + 해시태그"}]}';
 
   try {
-    const raw = await callWithFallback(loadModelConfig(), "sns", prompt, false, 2200, { userId: u.id, kind: "ig_plan" });
+    const raw = await callWithFallback(loadModelConfig(), "전문_SNS콘텐츠", prompt, false, 2200,
+      { userId: u.id, kind: "ig_plan" });
     const parsed = parseJSON(raw);
     let items = Array.isArray(parsed && parsed.posts) ? parsed.posts : [];
     if (!items.length) return res.status(502).json({ error: "콘텐츠 계획을 못 만들었어요. 잠시 뒤 다시 시도해 주세요." });
     items = items.slice(0, want);
 
-    // 예정 시각은 서버가 정한다 — 모델이 날짜를 지어내면 과거로 잡히거나 한꺼번에 몰린다.
-    const rows = items.map((it, i) => ({
-      id: crypto.randomBytes(6).toString("hex"),
-      kind: it.kind === "reels" ? "reels" : "cardnews",
-      title: String(it.title || it.hook || "제목 없음").slice(0, 80),
-      hook: String(it.hook || "").slice(0, 40),
-      bullets: (Array.isArray(it.bullets) ? it.bullets : []).slice(0, 3).map((x) => String(x).slice(0, 60)),
-      caption: String(it.caption || "").slice(0, 1200),
-      scheduledFor: kstSlotInDays(i + 1, t.hour),
-    }));
+    /* 예정 시각과 목적은 서버가 정한다 — 모델이 날짜를 지어내면 과거로 잡히거나 한꺼번에 몰리고,
+       목적을 스스로 고르게 두면 4:1 배분이 무너진다. */
+    const rows = items.map((it, idx) => {
+      const purpose = purposes[idx] || ATTRACT_KEYS[0];
+      const isConvert = CONTENT_PURPOSES[purpose].group === "convert";
+      const id = crypto.randomBytes(6).toString("hex");
+      return {
+        id,
+        kind: it.kind === "reels" ? "reels" : "cardnews",
+        title: String(it.title || it.hook || "제목 없음").slice(0, 80),
+        hook: String(it.hook || "").slice(0, 40),
+        bullets: (Array.isArray(it.bullets) ? it.bullets : []).slice(0, 3).map((x) => String(x).slice(0, 60)),
+        caption: String(it.caption || "").slice(0, 1200),
+        scheduledFor: kstSlotInDays(idx + 1, t.hour),
+        personaId: persona ? persona.id : null,
+        purpose,
+        sourceType: "generated",
+        platforms: ["instagram"],
+        /* 파는 콘텐츠에만 추적 링크를 붙인다. 모으는 글에 링크를 달면 도달이 떨어진다. */
+        utmCampaign: isConvert ? "nexta_" + purpose + "_" + id.slice(0, 6) : null,
+      };
+    });
     db.addIgPosts(u.id, rows);
     res.json({ ok: true, added: rows.length, posts: db.listIgPosts(u.id, 40) });
   } catch (e) {
     res.status(500).json({ error: "콘텐츠 계획 실패: " + e.message });
   }
+});
+
+/* ── ⑧ 수익화 Phase 1 — 제휴 링크 UTM ─────────────────────
+   링크에 캠페인 이름만 붙여 두면, 어느 게시물이 실제로 사람을 데려왔는지 나중에 갈라볼 수 있다. */
+app.post("/api/instagram/posts/:id/link", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const b = req.body || {};
+  const type = String(b.type || "");
+  if (!MONETIZATION_TYPES.includes(type)) return res.status(400).json({ error: "수익화 방식을 골라 주세요." });
+
+  const post = db.listIgPosts(u.id, 200).find((x) => x.id === String(req.params.id));
+  if (!post) return res.status(404).json({ error: "게시물을 찾을 수 없습니다." });
+
+  let url;
+  try {
+    url = new URL(String(b.url || ""));
+    if (url.protocol !== "https:") throw new Error("https");
+  } catch {
+    return res.status(400).json({ error: "https로 시작하는 주소를 넣어 주세요." });
+  }
+  const campaign = post.monetization?.utmCampaign || ("nexta_" + type + "_" + post.id.slice(0, 6));
+  url.searchParams.set("utm_source", "instagram");
+  url.searchParams.set("utm_medium", "social");
+  url.searchParams.set("utm_campaign", campaign);
+
+  db.setIgPostLink(u.id, post.id, type, url.toString(), campaign);
+  res.json({ ok: true, url: url.toString(), posts: db.listIgPosts(u.id, 40) });
+});
+
+/* ── ⑧ 수익화 Phase 1 — 대행 리드 ─────────────────────────
+   답장은 비비가 초안만 쓴다. 보내는 것은 사장님이 직접 한다 — 사람에게 가는 말이라서다. */
+app.get("/api/leads", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  res.json({ leads: db.listLeads(u.id, 50) });
+});
+
+app.post("/api/leads", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const b = req.body || {};
+  const message = String(b.message || "").trim().slice(0, 1000);
+  if (!message) return res.status(400).json({ error: "문의 내용을 적어 주세요." });
+  const source = ["instagram_dm", "threads", "form"].includes(b.source) ? b.source : "form";
+  db.addLead(u.id, {
+    id: crypto.randomBytes(6).toString("hex"),
+    source, handle: String(b.handle || "").trim().slice(0, 60),
+    message, contentId: b.contentId ? String(b.contentId) : null,
+  });
+  res.json({ ok: true, leads: db.listLeads(u.id, 50) });
+});
+
+app.post("/api/leads/:id/draft", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const lead = db.listLeads(u.id, 200).find((x) => x.id === String(req.params.id));
+  if (!lead) return res.status(404).json({ error: "문의를 찾을 수 없습니다." });
+
+  const persona = db.getActivePersona(u.id);
+  const prompt =
+    "고객 문의에 대한 답장 초안을 쓴다.\n" +
+    (persona ? "우리 타겟: " + persona.demographic + "\n" : "") +
+    (persona && persona.hasProduct ? "우리가 파는 것: " + persona.productDescription + "\n" : "") +
+    "문의 내용: " + lead.message + "\n\n" +
+    "3~4문장으로 짧게. 없는 실적이나 가격을 지어내지 않는다. 확실하지 않은 건 '확인해서 알려드리겠다'로 쓴다.\n" +
+    "설명 없이 답장 본문만 출력한다.";
+  try {
+    const draft = await callWithFallback(loadModelConfig(), "전문_고객문의", prompt, false, 400,
+      { userId: u.id, kind: "lead_reply" });
+    db.setLeadDraft(u.id, lead.id, String(draft || "").trim().slice(0, 1000));
+    res.json({ ok: true, leads: db.listLeads(u.id, 50) });
+  } catch (e) {
+    res.status(500).json({ error: "초안 작성 실패: " + e.message });
+  }
+});
+
+app.post("/api/leads/:id/status", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const status = String((req.body || {}).status || "");
+  if (!["new", "drafted", "sent", "closed"].includes(status)) {
+    return res.status(400).json({ error: "알 수 없는 상태입니다." });
+  }
+  if (!db.setLeadStatus(u.id, String(req.params.id), status)) {
+    return res.status(404).json({ error: "문의를 찾을 수 없습니다." });
+  }
+  res.json({ ok: true, leads: db.listLeads(u.id, 50) });
+});
+
+/* ── ⑦ 성과: 유입 vs 전환 + ⑨ 비율 제안 ───────────────────
+   팔로워가 늘어도 전환이 0이면 파는 글이 부족한 것이고, 그 반대면 모으는 글이 부족한 것이다.
+   판단은 규칙으로 하고 LLM을 부르지 않는다 — 덧셈으로 알 수 있는 것에 돈을 쓸 이유가 없다. */
+app.get("/api/instagram/performance", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const days = Math.max(1, Math.min(90, parseInt(req.query.days, 10) || 14));
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+
+  const rows = db.getPerfByPurpose(u.id, since);
+  const sum = (grp, field) => rows
+    .filter((r) => CONTENT_PURPOSES[r.purpose] && CONTENT_PURPOSES[r.purpose].group === grp)
+    .reduce((n, r) => n + Number(r[field] || 0), 0);
+
+  const attract = { posts: sum("attract", "posts"), views: sum("attract", "views"),
+    followerDelta: sum("attract", "followerDelta"), saves: sum("attract", "saves") };
+  const convert = { posts: sum("convert", "posts"), views: sum("convert", "views"),
+    linkClicks: sum("convert", "linkClicks"), leads: sum("convert", "leads") };
+
+  let suggestion = null;
+  if (attract.posts + convert.posts >= 5) {
+    if (convert.posts > 0 && convert.leads === 0 && convert.linkClicks === 0) {
+      suggestion = { direction: "convert", message: "유입은 있는데 전환이 0건이에요. 파는 콘텐츠 비중을 올려볼 시점입니다." };
+    } else if (attract.followerDelta <= 0) {
+      suggestion = { direction: "attract", message: "팔로워가 늘지 않고 있어요. 모으는 콘텐츠 비중을 올려볼 시점입니다." };
+    }
+  }
+
+  res.json({
+    days, attract, convert, byPurpose: rows,
+    /* 제안일 뿐 자동으로 바꾸지 않는다 — 비중은 사장님이 정한다. */
+    suggestion, autoApplied: false,
+  });
 });
 
 app.delete("/api/instagram/posts/:id", (req, res) => {

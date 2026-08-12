@@ -315,6 +315,55 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS ig_posts_user_idx
     ON ig_posts (user_id, created_at);
 
+  /* ── 타겟 페르소나 ────────────────────────────────────────
+     "무엇을 팔지"보다 "누구에게 팔지"가 먼저다. 여기서 정한 값이 이후 모든
+     콘텐츠 생성 프롬프트에 컨텍스트로 들어간다. 캠페인마다 다른 타겟을 잡을 수
+     있으므로 사용자당 여러 개를 허용하되, 한 번에 하나만 활성이다. */
+  CREATE TABLE IF NOT EXISTS target_personas (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    demographic TEXT NOT NULL,        -- "30대 워킹맘, 육아휴직 중"
+    pain_points TEXT NOT NULL,        -- JSON 배열
+    monetization_goals TEXT NOT NULL, -- JSON 배열 (MonetizationType)
+    has_product INTEGER NOT NULL DEFAULT 0,
+    product_description TEXT,
+    face_reveal INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS target_personas_user_idx
+    ON target_personas (user_id, active);
+
+  /* ── 성과 스냅샷 ──────────────────────────────────────────
+     유입 성과와 전환 성과를 한 행에 같이 담는다. 콘텐츠의 purpose로 갈라서
+     보여주면 되므로 표를 둘로 나눌 이유가 없다. */
+  CREATE TABLE IF NOT EXISTS perf_snapshots (
+    content_id TEXT NOT NULL,
+    on_date TEXT NOT NULL,
+    views INTEGER NOT NULL DEFAULT 0,
+    follower_delta INTEGER NOT NULL DEFAULT 0,
+    saves INTEGER NOT NULL DEFAULT 0,
+    link_clicks INTEGER NOT NULL DEFAULT 0,
+    leads INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (content_id, on_date)
+  );
+
+  /* ── 대행 리드 (수익화 Phase 1) ───────────────────────────
+     인스타 DM·문의로 들어온 사람을 담는 아주 작은 CRM. 비비가 답장 초안을 쓰고,
+     보내는 것은 사장님이 승인한 뒤에만 한다. */
+  CREATE TABLE IF NOT EXISTS leads (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,             -- instagram_dm | threads | form
+    handle TEXT,
+    message TEXT NOT NULL,
+    reply_draft TEXT,
+    status TEXT NOT NULL DEFAULT 'new',  -- new | drafted | sent | closed
+    content_id TEXT,                  -- 어느 게시물을 보고 왔는지 (있으면)
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS leads_user_idx ON leads (user_id, status, created_at);
+
   /* 팔로워 추이 — 하루 한 번만 찍는다(같은 날 두 번 조회해도 덮어쓴다). */
   CREATE TABLE IF NOT EXISTS ig_growth (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -336,6 +385,35 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 `);
+
+/* 콘텐츠에 "누구에게 / 무슨 목적으로 / 어디서 왔는지"를 붙인다.
+   이게 없으면 성과를 유입/전환으로 가를 수가 없다. */
+const igPostColumns = db.prepare("PRAGMA table_info(ig_posts)").all().map((c) => c.name);
+if (!igPostColumns.includes("persona_id")) {
+  db.exec("ALTER TABLE ig_posts ADD COLUMN persona_id TEXT");
+}
+if (!igPostColumns.includes("purpose")) {
+  // attract_problem | attract_money | attract_save | convert_story | convert_info
+  db.exec("ALTER TABLE ig_posts ADD COLUMN purpose TEXT NOT NULL DEFAULT 'attract_problem'");
+}
+if (!igPostColumns.includes("source_type")) {
+  // generated | product_demo
+  db.exec("ALTER TABLE ig_posts ADD COLUMN source_type TEXT NOT NULL DEFAULT 'generated'");
+}
+if (!igPostColumns.includes("platforms")) {
+  // JSON 배열 — instagram | threads 두 값만 쓴다
+  db.exec("ALTER TABLE ig_posts ADD COLUMN platforms TEXT NOT NULL DEFAULT '[\"instagram\"]'");
+}
+if (!igPostColumns.includes("monetization_type")) {
+  db.exec("ALTER TABLE ig_posts ADD COLUMN monetization_type TEXT");
+}
+if (!igPostColumns.includes("monetization_url")) {
+  db.exec("ALTER TABLE ig_posts ADD COLUMN monetization_url TEXT");
+}
+if (!igPostColumns.includes("utm_campaign")) {
+  db.exec("ALTER TABLE ig_posts ADD COLUMN utm_campaign TEXT");
+}
+
 
 /* ────────────────────────── 스마트스토어 연동 ──────────────────────────
  * 네이버 커머스API는 client_id + client_secret으로 매 요청마다 서명을 만들어 토큰을 받는다.
@@ -1337,20 +1415,29 @@ function hydrateIgPost(r) {
     id: r.id, kind: r.kind, title: r.title, hook: r.hook,
     bullets: parse(r.bullets, []), caption: r.caption || "",
     status: r.status, scheduledFor: r.scheduled_for,
+    personaId: r.persona_id || null, purpose: r.purpose, sourceType: r.source_type,
+    platforms: parse(r.platforms, ["instagram"]),
+    monetization: r.monetization_url ? { type: r.monetization_type, url: r.monetization_url, utmCampaign: r.utm_campaign } : null,
     mediaUrls: parse(r.media_urls, []), permalink: r.permalink || null,
     error: r.error || null, createdAt: r.created_at, postedAt: r.posted_at || null,
   };
 }
 function addIgPosts(userId, posts) {
   const stmt = db.prepare(
-    "INSERT INTO ig_posts (id, user_id, kind, title, hook, bullets, caption, scheduled_for, created_at)" +
-    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO ig_posts (id, user_id, kind, title, hook, bullets, caption, scheduled_for, created_at," +
+    " persona_id, purpose, source_type, platforms, monetization_type, monetization_url, utm_campaign)" +
+    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   );
   const now = new Date().toISOString();
   db.transaction((rows) => {
     for (const p of rows) {
       stmt.run(p.id, userId, p.kind, p.title, p.hook, JSON.stringify(p.bullets || []),
-        p.caption || "", p.scheduledFor, now);
+        p.caption || "", p.scheduledFor, now,
+        p.personaId || null,
+        p.purpose || "attract_problem",
+        p.sourceType || "generated",
+        JSON.stringify(p.platforms && p.platforms.length ? p.platforms : ["instagram"]),
+        p.monetizationType || null, p.monetizationUrl || null, p.utmCampaign || null);
     }
   })(posts);
 }
@@ -1431,6 +1518,122 @@ function linkProvider(userId, provider, providerId) {
   db.prepare("UPDATE users SET provider = ?, provider_id = ? WHERE id = ?").run(provider, providerId, userId);
 }
 
+/* ────────────────────── 타겟 페르소나 · 성과 · 리드 ────────────────────── */
+
+const jsonOr = (v, d) => { try { return v ? JSON.parse(v) : d; } catch { return d; } };
+
+function hydratePersona(r) {
+  if (!r) return null;
+  return {
+    id: r.id, demographic: r.demographic,
+    painPoints: jsonOr(r.pain_points, []),
+    monetizationGoals: jsonOr(r.monetization_goals, []),
+    hasProduct: !!r.has_product,
+    productDescription: r.product_description || "",
+    faceReveal: !!r.face_reveal,
+    active: !!r.active, createdAt: r.created_at,
+  };
+}
+/** 새 페르소나를 만들면 이전 것들은 비활성으로 내린다 — 활성은 항상 하나다. */
+function addPersona(userId, p) {
+  db.transaction(() => {
+    db.prepare("UPDATE target_personas SET active = 0 WHERE user_id = ?").run(userId);
+    db.prepare(
+      "INSERT INTO target_personas (id, user_id, demographic, pain_points, monetization_goals," +
+      " has_product, product_description, face_reveal, active, created_at)" +
+      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)"
+    ).run(p.id, userId, p.demographic, JSON.stringify(p.painPoints || []),
+      JSON.stringify(p.monetizationGoals || []), p.hasProduct ? 1 : 0,
+      p.productDescription || null, p.faceReveal ? 1 : 0, new Date().toISOString());
+  })();
+  return getActivePersona(userId);
+}
+function getActivePersona(userId) {
+  return hydratePersona(
+    db.prepare("SELECT * FROM target_personas WHERE user_id = ? AND active = 1").get(userId)
+  );
+}
+function getPersonaById(userId, id) {
+  return hydratePersona(
+    db.prepare("SELECT * FROM target_personas WHERE id = ? AND user_id = ?").get(id, userId)
+  );
+}
+function listPersonas(userId) {
+  return db.prepare("SELECT * FROM target_personas WHERE user_id = ? ORDER BY created_at DESC")
+    .all(userId).map(hydratePersona);
+}
+function activatePersona(userId, id) {
+  return db.transaction(() => {
+    const owned = db.prepare("SELECT 1 FROM target_personas WHERE id = ? AND user_id = ?").get(id, userId);
+    if (!owned) return false;
+    db.prepare("UPDATE target_personas SET active = 0 WHERE user_id = ?").run(userId);
+    db.prepare("UPDATE target_personas SET active = 1 WHERE id = ?").run(id);
+    return true;
+  })();
+}
+
+/** 성과는 같은 날 여러 번 조회해도 한 행만 남긴다. */
+function recordPerf(contentId, onDate, m) {
+  db.prepare(
+    "INSERT INTO perf_snapshots (content_id, on_date, views, follower_delta, saves, link_clicks, leads)" +
+    " VALUES (?, ?, ?, ?, ?, ?, ?)" +
+    " ON CONFLICT(content_id, on_date) DO UPDATE SET" +
+    "  views = excluded.views, follower_delta = excluded.follower_delta, saves = excluded.saves," +
+    "  link_clicks = excluded.link_clicks, leads = excluded.leads"
+  ).run(contentId, onDate, m.views || 0, m.followerDelta || 0, m.saves || 0,
+    m.linkClicks || 0, m.leads || 0);
+}
+/** 유입/전환을 가르는 건 콘텐츠의 purpose다. 합계를 목적별로 묶어 돌려준다. */
+function getPerfByPurpose(userId, sinceDate) {
+  return db.prepare(
+    "SELECT p.purpose," +
+    "  COUNT(DISTINCT p.id) AS posts," +
+    "  COALESCE(SUM(s.views),0) AS views," +
+    "  COALESCE(SUM(s.follower_delta),0) AS followerDelta," +
+    "  COALESCE(SUM(s.saves),0) AS saves," +
+    "  COALESCE(SUM(s.link_clicks),0) AS linkClicks," +
+    "  COALESCE(SUM(s.leads),0) AS leads" +
+    " FROM ig_posts p LEFT JOIN perf_snapshots s ON s.content_id = p.id" +
+    " WHERE p.user_id = ? AND p.created_at >= ?" +
+    " GROUP BY p.purpose"
+  ).all(userId, sinceDate);
+}
+
+function hydrateLead(r) {
+  return {
+    id: r.id, source: r.source, handle: r.handle || "", message: r.message,
+    replyDraft: r.reply_draft || "", status: r.status,
+    contentId: r.content_id || null, createdAt: r.created_at,
+  };
+}
+function addLead(userId, l) {
+  db.prepare(
+    "INSERT INTO leads (id, user_id, source, handle, message, content_id, created_at)" +
+    " VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(l.id, userId, l.source, l.handle || null, l.message, l.contentId || null,
+    new Date().toISOString());
+}
+function listLeads(userId, limit) {
+  return db.prepare("SELECT * FROM leads WHERE user_id = ? ORDER BY created_at DESC LIMIT ?")
+    .all(userId, limit || 50).map(hydrateLead);
+}
+function setLeadDraft(userId, id, draft) {
+  return db.prepare("UPDATE leads SET reply_draft = ?, status = 'drafted' WHERE id = ? AND user_id = ?")
+    .run(draft, id, userId).changes === 1;
+}
+function setLeadStatus(userId, id, status) {
+  return db.prepare("UPDATE leads SET status = ? WHERE id = ? AND user_id = ?")
+    .run(status, id, userId).changes === 1;
+}
+
+/** 게시물에 수익화 링크를 붙인다. 남의 게시물은 못 건드린다. */
+function setIgPostLink(userId, id, type, url, campaign) {
+  return db.prepare(
+    "UPDATE ig_posts SET monetization_type = ?, monetization_url = ?, utm_campaign = ?" +
+    " WHERE id = ? AND user_id = ?"
+  ).run(type, url, campaign, id, userId).changes === 1;
+}
+
 module.exports = {
   getSmartstoreAccount, upsertSmartstoreAccount, deleteSmartstoreAccount, markSmartstoreError,
   logVideoAttempt, getVideoServiceStats, getUserVideoCostThisMonth,
@@ -1439,6 +1642,10 @@ module.exports = {
   getTiktokAccount, upsertTiktokAccount, deleteTiktokAccount, markTiktokError,
   upsertRevenue, upsertRevenueMany, deleteRevenue, listRevenue, getRevenueTotal,
   getRevenueKey, setRevenueKey, deleteRevenueKey, markRevenueSync, listRevenueKeyUsers,
+  setIgPostLink,
+  addPersona, getActivePersona, getPersonaById, listPersonas, activatePersona,
+  recordPerf, getPerfByPurpose,
+  addLead, listLeads, setLeadDraft, setLeadStatus,
   getIgTarget, upsertIgTarget, addIgPosts, listIgPosts, deleteIgPost,
   getDueIgPosts, markIgPost, claimIgPost, recordIgGrowth, listIgGrowth,
   addQueueItem, listQueue, countPendingQueue, nextPendingQueueItem, markQueueItem, deleteQueueItem,
