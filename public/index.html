@@ -718,7 +718,7 @@
       <button class="btn-sm" id="logoutBtn">로그아웃</button>
     </div>
 
-    <h1 class="dashboard-title">다시 오신 걸 환영해요!</h1>
+    <h1 class="dashboard-title" id="homeGreeting">다시 오신 걸 환영해요!</h1>
     <div class="search-bar">
       <textarea id="q" rows="1" placeholder="오늘은 어떤 업무를 시킬까요?"></textarea>
       <button class="send-btn" id="btn" title="업무 지시하기">
@@ -729,7 +729,7 @@
     <div class="chip-row" id="examples"></div>
     <div class="chip-row" id="templatesBar"></div>
     <div class="opt-row">
-      <label><input type="checkbox" id="quickMode"> ⚡ 빠른 모드 (검수 생략, 20 절약)</label>
+      <label><input type="checkbox" id="quickMode"> ⚡ 빠른 모드 (검수 생략, <b id="quickSave">16</b> 절약)</label>
       <span>예상 차감 <b id="costEst">0</b> 크레딧</span>
       <span id="hint">보통 2~5분 걸려요</span>
     </div>
@@ -1014,7 +1014,27 @@
     <div class="ig-grid">
       <!-- 왼쪽: 타깃 -->
       <div>
-        <div class="t-label" style="margin-bottom:12px;">누구에게 보일까요</div>
+        <div class="t-label" style="margin-bottom:12px;">인스타그램 연결</div>
+        <div class="ig-box" id="igConnBox">
+          <div id="igConnState"></div>
+          <div id="igConnForm">
+            <label for="igUserId">인스타그램 계정 ID</label>
+            <input id="igUserId" placeholder="17841400000000000" inputmode="numeric">
+            <div class="ig-hint">메타 그래프 API 탐색기에서 <b>/me/accounts</b> 를 조회하면 나오는
+              숫자 ID입니다. @아이디가 아니라 숫자예요.</div>
+            <label for="igToken">액세스 토큰</label>
+            <input id="igToken" type="password" placeholder="EAAG…" autocomplete="off">
+            <div class="ig-hint">장기 토큰(60일)을 넣으세요. 서버에 암호화해서 저장하고,
+              저장한 뒤에는 화면에 다시 보여주지 않습니다.</div>
+            <label for="igKeyword">댓글 유도 키워드</label>
+            <input id="igKeyword" placeholder="정보">
+            <div class="ig-actions">
+              <button class="bigbtn go" id="igConnBtn" style="flex:1;">연결하기</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="t-label" style="margin:22px 0 12px;">누구에게 보일까요</div>
         <div class="ig-box">
           <label for="igTopic">계정 주제</label>
           <input id="igTopic" placeholder="예: 30대 직장인 재테크">
@@ -1692,6 +1712,69 @@ var OAUTH_MARK = {
   if(err || q.get('auth')) history.replaceState(null, '', location.pathname);
 })();
 
+/* ══════ 홈 인사말 ══════
+   들어올 때마다 하나를 골라 보여준다. 매번 같은 문장이 걸려 있으면 화면이 멈춰 있는 것처럼
+   느껴진다. 다섯 개를 돌리되, 직전에 본 것은 피해서 두 번 연속 같은 말이 나오지 않게 한다. */
+var GREETINGS = [
+  '다시 오신 걸 환영해요!',
+  '귀찮은 일은 비비에게 시키세요',
+  '오늘은 뭘 맡겨볼까요?',
+  '비비들은 이미 출근해 있어요',
+  '사장님은 결정만 하세요'
+];
+function rollGreeting(){
+  var el = document.getElementById('homeGreeting');
+  if(!el) return;
+  var last = -1;
+  try { last = parseInt(sessionStorage.getItem('nexta_greet'), 10); } catch(e){}
+  var i = Math.floor(Math.random() * GREETINGS.length);
+  if(GREETINGS.length > 1 && i === last) i = (i + 1) % GREETINGS.length;
+  try { sessionStorage.setItem('nexta_greet', String(i)); } catch(e){}
+  el.textContent = GREETINGS[i];
+}
+
+/* ══════ 인스타그램 연결 ══════ */
+function renderIgConn(connected){
+  var st = document.getElementById('igConnState');
+  var form = document.getElementById('igConnForm');
+  if(!st || !form) return;
+  if(connected){
+    st.innerHTML = '<div style="display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:700;color:var(--green);">'
+      + '<span style="width:8px;height:8px;border-radius:50%;background:var(--green);display:block;"></span>'
+      + '연결됨</div>'
+      + '<div class="ig-hint" style="margin-top:6px;">토큰이 만료되면 아래에서 다시 연결하세요.</div>'
+      + '<button class="btn-sm" id="igReconnBtn" style="margin-top:12px;">다시 연결하기</button>';
+    form.style.display = 'none';
+    document.getElementById('igReconnBtn').onclick = function(){
+      form.style.display = 'block'; this.style.display = 'none';
+    };
+  } else {
+    st.innerHTML = '';
+    form.style.display = 'block';
+  }
+}
+
+(function bindIgConnect(){
+  var btn = document.getElementById('igConnBtn');
+  if(!btn) return;
+  btn.onclick = function(){
+    var id = document.getElementById('igUserId').value.trim();
+    var token = document.getElementById('igToken').value.trim();
+    if(!id || !token){ alert('계정 ID와 액세스 토큰을 모두 넣어 주세요.'); return; }
+    btn.disabled = true;
+    igApi('/api/social/connect', {
+      igUserId: id, accessToken: token,
+      commentKeyword: document.getElementById('igKeyword').value.trim() || '정보'
+    }).then(function(){
+      /* 토큰은 화면에 남기지 않는다 — 어깨너머로도 안 보이는 게 낫다 */
+      document.getElementById('igToken').value = '';
+      celebrate('인스타그램을 연결했어요');
+      loadInstagram();
+    }).catch(function(e){ alert(e.message); })
+      .then(function(){ btn.disabled = false; });
+  };
+})();
+
 /* ══════ 인스타 키우기 ══════ */
 /* 이 파일에는 공용 요청 헬퍼가 없고 raw fetch를 쓴다. CSRF 토큰은 전역에서 fetch를
    가로채 붙여 주므로 여기서는 신경 쓰지 않는다. */
@@ -1803,6 +1886,7 @@ function renderIgPosts(posts){
 function applyIg(d){
   igState = { connected:!!d.connected, target:d.target, posts:d.posts||[],
               growth:d.growth||[], cost:d.cost||igState.cost };
+  renderIgConn(igState.connected);
   renderIgTarget(d.target || {});
   renderIgGrowth(igState.growth);
   renderIgPosts(igState.posts);
@@ -1935,7 +2019,7 @@ function buildCards(){
     var pickable = PICKABLE.indexOf(p.name) >= 0;
 
     var card = document.createElement('div');
-    card.className = 'ai-card st-idle selected' + (pickable ? '' : ' locked');
+    card.className = 'ai-card st-idle' + (pickable ? '' : ' selected locked');
     card.style.setProperty('--rc', p.color);
     card.style.setProperty('--tint', tint(p.color, .14));
     card.setAttribute('data-key', p.name);
@@ -2092,13 +2176,20 @@ function fmt(text){
 /* ══════ 비용 ══════ */
 function isQuick(){ var q=document.getElementById('quickMode'); return !!(q&&q.checked); }
 function updateCostEst(){
-  document.getElementById('costEst').textContent = selectedAgents().length*COST.perAgent + (isQuick()?0:COST.manager);
+  var picked = selectedAgents().length;
+  var el = document.getElementById('costEst');
+  var manager = isQuick() ? 0 : COST.manager;
+  if(picked){ el.textContent = picked*COST.perAgent + manager; return; }
+  /* 아무도 안 고르면 총괄이 질문을 보고 보통 2~3명을 부른다. 범위로 알려준다. */
+  el.textContent = (2*COST.perAgent + manager) + '~' + (3*COST.perAgent + manager);
 }
 document.getElementById('quickMode').addEventListener('change', updateCostEst);
 
 /* ══════ 크레딧 ══════ */
 function renderCredits(user){
   me = user;
+  var qs = document.getElementById('quickSave');
+  if(qs) qs.textContent = COST.manager;
   document.getElementById('acctEmail').textContent = user.email;
   document.getElementById('creditNum').textContent = user.credits;
   var ceiling = user.ceiling || user.credits || 1;
@@ -3489,7 +3580,7 @@ function checkAuth(){
     .then(function(d){
       COST.perAgent=d.costPerAgent; COST.manager=d.costManager;
       renderCredits(d.user); updateCostEst(); goTo('screen2'); maybeAskCompany(); loadSubscriptionConfig(); loadBankTransferConfig();
-      applyBookmarkletImport(); refreshAdminNav();
+      applyBookmarkletImport(); refreshAdminNav(); rollGreeting();
     })
     .catch(function(){ goTo('screen1'); });
 }

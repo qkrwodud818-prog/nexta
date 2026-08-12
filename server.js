@@ -216,8 +216,8 @@ async function callWithFallback(config, roleKey, prompt, useSearch, maxTokens, l
  */
 const SESSION_SECRET = process.env.SESSION_SECRET || "virtual-office-dev-secret-change-me";
 const SIGNUP_BONUS = 300;   // 가입 시 무료로 주는 체험 크레딧 (구독 없이도 한 번 써볼 수 있게)
-const COST_PER_AGENT = 10;  // 담당자 1명당 차감 크레딧
-const COST_MANAGER = 20;    // 총괄AI 검수 차감 크레딧
+const COST_PER_AGENT = 4;   // 담당자 1명당 차감 크레딧 (담당자는 무료 모델을 쓴다 — 폴백 대비분만 받는다)
+const COST_MANAGER = 16;    // 총괄AI 검수 — 유일하게 유료 모델을 쓰는 단계라 여기에 원가가 몰린다
 const COST_CARDNEWS = 30;   // 카드뉴스 1건 생성 시 차감 크레딧
 
 // 결제(토스페이먼츠) — 사업자가 실제 가맹 승인을 받으면 .env의 TOSS_CLIENT_KEY / TOSS_SECRET_KEY를
