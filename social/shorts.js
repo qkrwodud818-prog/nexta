@@ -49,7 +49,9 @@ function runFfmpeg(args) {
  * @param {string} outPath 출력 mp4 경로
  * @returns {Promise<{path:string, seconds:number}>}
  */
-async function generateShort(imagePaths, outPath) {
+/* durations: 장면별 길이(초). 안 주면 전부 SECONDS_PER_IMAGE.
+   훅 장면은 짧고 굵게, 설명 장면은 읽을 시간을 줘야 해서 길이가 달라야 한다. */
+async function generateShort(imagePaths, outPath, durations) {
   const images = imagePaths.filter((p) => p && fs.existsSync(p));
   if (!images.length) throw new Error("영상으로 만들 이미지가 없습니다.");
 
@@ -66,11 +68,12 @@ async function generateShort(imagePaths, outPath) {
 
     // concat 디머서는 마지막 항목의 duration을 무시하므로 마지막 프레임을 한 번 더 적어준다.
     const listPath = path.join(workDir, "list.txt");
-    const lines = frames.map((f) => `file '${f.replace(/\\/g, "/")}'\nduration ${SECONDS_PER_IMAGE}`);
+    const secFor = (i) => (Array.isArray(durations) && durations[i] > 0 ? durations[i] : SECONDS_PER_IMAGE);
+    const lines = frames.map((f, i) => `file '${f.replace(/\\/g, "/")}'\nduration ${secFor(i)}`);
     lines.push(`file '${frames[frames.length - 1].replace(/\\/g, "/")}'`);
     fs.writeFileSync(listPath, lines.join("\n"), "utf8");
 
-    const seconds = frames.length * SECONDS_PER_IMAGE;
+    const seconds = frames.reduce((n, _, i) => n + secFor(i), 0);
     await runFfmpeg([
       "-y",
       "-f", "concat", "-safe", "0", "-i", listPath,

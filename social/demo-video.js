@@ -87,20 +87,56 @@ function uiMock(kind, lines) {
   return card + body.join("");
 }
 
-/** 장면 하나를 1080×1920 PNG로. */
+/* 자막 띠 — 화면 아래에 대비 높게 깐다. 소리를 끄고 보는 사람이 대부분이라
+   자막이 곧 나레이션이고, 3초 유지율을 끌어올리는 것도 이쪽이다. */
+function subtitle(text, yTop, size) {
+  const fs2 = size || 42;
+  const perLine = Math.round(22 * (42 / fs2));
+  const lines = wrap(text, perLine);
+  const lh = Math.round(fs2 * 1.48), padY = 26;
+  const boxes = lines.map((l, i) => {
+    const wpx = Math.min(W - 100, l.length * (fs2 * 0.82) + 56);
+    return `<rect x="${(W - wpx) / 2}" y="${yTop + padY + i * lh - lh * 0.74}" width="${wpx}" height="${lh - 6}" rx="12" fill="rgba(11,14,20,.9)"/>`;
+  }).join("");
+  const txt = lines.map((l, i) =>
+    `<tspan x="${W / 2}" y="${yTop + padY + i * lh}">${esc(l)}</tspan>`).join("");
+  return boxes + `<text font-size="${fs2}" font-weight="700" fill="#fff" text-anchor="middle">${txt}</text>`;
+}
+
+/* 훅 프레임 — 첫 화면.
+   보는 사람의 판단은 1.7초 안에 끝난다. 그 시간 안에 화면에 떠 있어야 하는 건 주장 하나뿐이라,
+   여기엔 진행 표시도 로고도 넣지 않는다. 첫 프레임의 자리는 전부 문장 몫이다. */
+function hookSvg(scene) {
+  const lines = wrap(scene.title, 9);
+  const size = lines.length >= 4 ? 116 : lines.length === 3 ? 132 : 150;
+  const lh = size * 1.18;
+  const startY = H / 2 - ((lines.length - 1) * lh) / 2 - 60;
+  const body = lines.map((l, i) =>
+    `<tspan x="${W / 2}" y="${startY + i * lh}">${esc(l)}</tspan>`).join("");
+  return `<rect width="${W}" height="${H}" fill="${INK}"/>
+    <circle cx="${W / 2}" cy="${H / 2 - 60}" r="620" fill="${BRAND}" opacity="0.10"/>
+    <g font-family="${FONT}">
+      <text font-size="${size}" font-weight="800" fill="#fff" text-anchor="middle" letter-spacing="-3">${body}</text>
+      ${scene.narration ? subtitle(scene.narration, H - 560, 54) : ""}
+    </g>`;
+}
+
+/** 장면 하나를 1080×1920 PNG로. index 0은 훅 프레임이다. */
 async function renderScene(scene, index, total, outPath) {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-    <rect width="${W}" height="${H}" fill="${INK}"/>
+  const inner = index === 0 && scene.hook !== false
+    ? hookSvg(scene)
+    : `<rect width="${W}" height="${H}" fill="${INK}"/>
     <g font-family="${FONT}">
       <text x="90" y="200" font-size="30" fill="#8791a6" letter-spacing="6">${esc(String(index + 1).padStart(2, "0"))} / ${esc(String(total).padStart(2, "0"))}</text>
-      <text x="90" y="330" font-size="72" font-weight="800" fill="#fff">${tspans(scene.title, 90, 330, 92, 15)}</text>
+      <text x="90" y="330" font-size="76" font-weight="800" fill="#fff" letter-spacing="-2">${tspans(scene.title, 90, 330, 96, 14)}</text>
       ${uiMock(scene.ui || "result", scene.uiLines || [])}
-      <text x="90" y="1470" font-size="38" fill="rgba(255,255,255,.82)">${tspans(scene.narration, 90, 1470, 54, 24)}</text>
-      <rect x="90" y="1760" width="${W - 180}" height="8" rx="4" fill="rgba(255,255,255,.12)"/>
-      <rect x="90" y="1760" width="${(W - 180) * ((index + 1) / total)}" height="8" rx="4" fill="${BRAND}"/>
-      <text x="90" y="1850" font-size="30" fill="rgba(255,255,255,.45)" letter-spacing="8">NEXTA</text>
-    </g>
-  </svg>`;
+      ${subtitle(scene.narration, 1380)}
+      <rect x="90" y="1790" width="${W - 180}" height="8" rx="4" fill="rgba(255,255,255,.12)"/>
+      <rect x="90" y="1790" width="${(W - 180) * ((index + 1) / total)}" height="8" rx="4" fill="${BRAND}"/>
+      <text x="90" y="1870" font-size="30" fill="rgba(255,255,255,.45)" letter-spacing="8">NEXTA</text>
+    </g>`;
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${inner}</svg>`;
   await sharp(Buffer.from(svg)).png().toFile(outPath);
 }
 
@@ -119,8 +155,11 @@ async function generateDemoVideo(scenes, outDir) {
     await renderScene(scenes[i], i, scenes.length, p);
     framePaths.push(p);
   }
+  /* 훅은 짧고 굵게, 설명 장면은 자막을 읽을 시간을 준다.
+     전부 같은 길이로 두면 훅에서 늘어지고 설명에서 급해진다. */
+  const durations = scenes.map((sc, i) => (i === 0 ? 2 : sc.ui === "agents" ? 3.5 : 3));
   const outPath = path.join(outDir, "demo.mp4");
-  await generateShort(framePaths, outPath);
+  await generateShort(framePaths, outPath, durations);
   return outPath;
 }
 
