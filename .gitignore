@@ -6,3 +6,4 @@ data/*.db
 data/*.db-*
 public/cardnews/
 public/shorts/
+public/demo/

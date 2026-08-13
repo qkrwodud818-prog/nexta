@@ -1634,6 +1634,19 @@ function setIgPostLink(userId, id, type, url, campaign) {
   ).run(type, url, campaign, id, userId).changes === 1;
 }
 
+/** 발행 시각(KST)별 평균 반응. scheduled_for가 'YYYY-MM-DD HH'라 뒤 두 글자가 시각이다. */
+function getPerfByHour(userId, sinceDate) {
+  return db.prepare(
+    "SELECT CAST(substr(p.scheduled_for, 12, 2) AS INTEGER) AS hour," +
+    "  COUNT(DISTINCT p.id) AS posts," +
+    "  COALESCE(AVG(s.views), 0) AS avgViews," +
+    "  COALESCE(AVG(s.saves + s.link_clicks), 0) AS avgActions" +
+    " FROM ig_posts p LEFT JOIN perf_snapshots s ON s.content_id = p.id" +
+    " WHERE p.user_id = ? AND p.status = 'done' AND p.created_at >= ?" +
+    " GROUP BY hour ORDER BY hour"
+  ).all(userId, sinceDate);
+}
+
 module.exports = {
   getSmartstoreAccount, upsertSmartstoreAccount, deleteSmartstoreAccount, markSmartstoreError,
   logVideoAttempt, getVideoServiceStats, getUserVideoCostThisMonth,
@@ -1644,7 +1657,7 @@ module.exports = {
   getRevenueKey, setRevenueKey, deleteRevenueKey, markRevenueSync, listRevenueKeyUsers,
   setIgPostLink,
   addPersona, getActivePersona, getPersonaById, listPersonas, activatePersona,
-  recordPerf, getPerfByPurpose,
+  recordPerf, getPerfByPurpose, getPerfByHour,
   addLead, listLeads, setLeadDraft, setLeadStatus,
   getIgTarget, upsertIgTarget, addIgPosts, listIgPosts, deleteIgPost,
   getDueIgPosts, markIgPost, claimIgPost, recordIgGrowth, listIgGrowth,

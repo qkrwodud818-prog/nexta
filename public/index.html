@@ -624,6 +624,27 @@
   .perf-note b{ font-weight:700; }
   .perf-note.quiet{ background:var(--bg); color:var(--soft); }
 
+  /* 문의(리드) — 상태로 무엇을 할 차례인지 보이게 */
+  .lead{ padding:12px 0; border-top:1px solid var(--line); }
+  .lead:first-child{ border-top:none; }
+  .lead-top{ display:flex; align-items:center; gap:9px; }
+  .lead-who{ font-family:var(--f-data); font-size:12px; color:var(--soft); }
+  .lead-st{ font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; margin-left:auto; }
+  .lead-st.new{ background:var(--wash); color:var(--purple); }
+  .lead-st.drafted{ background:#fff7ed; color:#b45309; }
+  .lead-st.sent{ background:#ecfdf5; color:#0f766e; }
+  .lead-st.closed{ background:var(--bg); color:var(--soft); }
+  .lead-msg{ font-size:13.5px; line-height:1.6; margin-top:6px; }
+  .lead-draft{ background:var(--bg); border:1px solid var(--line); border-radius:var(--r-1);
+    padding:10px 12px; font-size:13px; line-height:1.65; margin-top:8px; white-space:pre-wrap; }
+  .lead-btns{ display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  /* 추천 시각 */
+  .hour-pick{ display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .hour-pick button{ font-family:var(--f-data); font-size:12.5px; font-weight:600;
+    padding:6px 12px; border:1px solid var(--line); background:#fff; border-radius:999px;
+    color:var(--ink); cursor:pointer; }
+  .hour-pick button:hover{ border-color:var(--purple); color:var(--purple); }
+
   /* ══════ SCREEN 9 — 관리자 ══════ */
   #screen9 .main-content{ background:var(--bg); }
   .ad-tabs{ display:flex; gap:6px; margin-bottom:18px; flex-wrap:wrap; }
@@ -1136,6 +1157,10 @@
               <select id="igHour"></select>
             </div>
           </div>
+          <div class="hour-pick" id="igBestHours"></div>
+          <div class="ig-hint" id="igHourNote"></div>
+          <div style="display:none;">
+          </div>
 
           <label>카드뉴스 · 릴스 비율</label>
           <div class="ig-mix">
@@ -1185,6 +1210,9 @@
           </div>
           <div id="perfNote"></div>
         </div>
+
+        <div class="t-label" style="margin:22px 0 12px;">들어온 문의</div>
+        <div class="ig-box" id="leadBox"><div class="ig-empty">아직 들어온 문의가 없어요.</div></div>
 
         <div class="t-label" style="margin:22px 0 12px;">올릴 예정</div>
         <div class="ig-box" id="igPosts"><div class="ig-empty">아직 계획된 게시물이 없어요.</div></div>
@@ -1886,6 +1914,72 @@ function renderIgConn(connected){
   };
 })();
 
+/* ══════ 올릴 시각 추천 ══════ */
+function renderBestHours(d){
+  var box = document.getElementById('igBestHours');
+  var note = document.getElementById('igHourNote');
+  if(!box) return;
+  box.innerHTML = (d.hours || []).map(function(h){
+    return '<button type="button" data-hour="' + h + '">' + ('0' + h).slice(-2) + ':00</button>';
+  }).join('');
+  box.querySelectorAll('[data-hour]').forEach(function(b){
+    b.onclick = function(){
+      document.getElementById('igHour').value = b.getAttribute('data-hour');
+      celebrate('올릴 시각을 ' + b.textContent + '로 바꿨어요');
+    };
+  });
+  if(note) note.textContent = d.note || '';
+}
+function loadBestHours(){
+  igApi('/api/instagram/best-hours').then(renderBestHours).catch(function(){});
+}
+
+/* ══════ 들어온 문의 ══════ */
+function renderLeads(list){
+  var box = document.getElementById('leadBox');
+  if(!box) return;
+  if(!list || !list.length){ box.innerHTML = '<div class="ig-empty">아직 들어온 문의가 없어요.</div>'; return; }
+  var LB = { new:'새 문의', drafted:'초안 있음', sent:'보냄', closed:'종료' };
+  box.innerHTML = list.map(function(x){
+    return '<div class="lead">'
+      + '<div class="lead-top"><span class="lead-who">' + esc(x.handle || x.source) + '</span>'
+      +   '<span class="lead-st ' + x.status + '">' + (LB[x.status] || x.status) + '</span></div>'
+      + '<div class="lead-msg">' + esc(x.message) + '</div>'
+      + (x.replyDraft ? '<div class="lead-draft">' + esc(x.replyDraft) + '</div>' : '')
+      + '<div class="lead-btns">'
+      +   (x.status !== 'sent' && x.status !== 'closed'
+            ? '<button class="btn-sm" data-draft="' + esc(x.id) + '">답장 초안 만들기</button>' : '')
+      +   (x.replyDraft && x.status !== 'sent'
+            ? '<button class="btn-sm pri" data-sent="' + esc(x.id) + '">보냈어요</button>' : '')
+      +   (x.status !== 'closed' ? '<button class="btn-sm" data-close="' + esc(x.id) + '">종료</button>' : '')
+      + '</div></div>';
+  }).join('');
+
+  box.querySelectorAll('[data-draft]').forEach(function(b){
+    b.onclick = function(){
+      var old = b.textContent; b.disabled = true; b.textContent = '쓰는 중…';
+      igApi('/api/leads/' + encodeURIComponent(b.getAttribute('data-draft')) + '/draft', {})
+        .then(function(d){ renderLeads(d.leads); })
+        .catch(function(e){ alert(e.message); b.disabled = false; b.textContent = old; });
+    };
+  });
+  /* "보냈어요"는 우리가 보내는 게 아니라, 사장님이 보낸 걸 기록하는 버튼이다.
+     초안을 자동 발송하지 않는 이유는 사람에게 가는 말이기 때문이다. */
+  box.querySelectorAll('[data-sent]').forEach(function(b){
+    b.onclick = function(){ setLeadStatus(b.getAttribute('data-sent'), 'sent'); };
+  });
+  box.querySelectorAll('[data-close]').forEach(function(b){
+    b.onclick = function(){ setLeadStatus(b.getAttribute('data-close'), 'closed'); };
+  });
+}
+function setLeadStatus(id, status){
+  igApi('/api/leads/' + encodeURIComponent(id) + '/status', { status: status })
+    .then(function(d){ renderLeads(d.leads); }).catch(function(e){ alert(e.message); });
+}
+function loadLeads(){
+  igApi('/api/leads').then(function(d){ renderLeads(d.leads); }).catch(function(){});
+}
+
 /* ══════ 콘텐츠 성과 — 유입 vs 전환 ══════ */
 function perfRows(items){
   return items.map(function(r){
@@ -2126,6 +2220,8 @@ function applyIg(d){
 function loadInstagram(){
   loadPersona();
   loadPerformance();
+  loadBestHours();
+  loadLeads();
   igApi('/api/instagram/overview').then(applyIg).catch(function(e){ console.warn(e); });
 }
 

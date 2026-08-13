@@ -21,6 +21,7 @@ require("dotenv").config();
 
 const { generateCardNews } = require("./social/cardnews");
 const { generateShort } = require("./social/shorts");
+const { generateDemoVideo, buildCaption } = require("./social/demo-video");
 const { publishCarouselPost, publishReel, fetchProfileStats, verifyWebhook, handleCommentWebhook } = require("./social/instagram");
 const db = require("./db"); // SQLite(better-sqlite3) 기반 저장소 — data/nexta.db
 
@@ -3509,6 +3510,141 @@ app.post("/webhooks/instagram", async (req, res) => {
 });
 
 // 업무 시작 → 작업번호만 즉시 돌려주고, 실제 일은 뒤에서 진행
+/* ══════════════════════════════════════════════════════════════
+   ⑧ 올릴 시각 추천
+
+   데이터가 없으면 업종 벤치마크, 쌓이면 자기 데이터. 갈아타는 기준은 게시물 수다 —
+   서너 건으로 "이 시간이 좋다"고 말하면 그냥 우연을 규칙이라고 우기는 것이다.
+   ══════════════════════════════════════════════════════════════ */
+const HOUR_MIN_POSTS = 8;   // 이만큼은 쌓여야 자기 데이터로 판단한다
+
+/* 업종별 기본 시간대 — 그 시간에 사람이 폰을 보는 시각이다.
+   출퇴근길·점심·잠들기 전. 계정 데이터가 쌓이기 전까지만 쓴다. */
+const HOUR_BENCHMARK = {
+  "재테크":   [7, 12, 22], "부업": [7, 12, 22],
+  "육아":     [10, 14, 21], "교육": [10, 14, 21], "학원": [10, 14, 21],
+  "뷰티":     [12, 19, 22], "패션": [12, 19, 22],
+  "요식":     [11, 17, 20], "식당": [11, 17, 20], "카페": [11, 17, 20],
+  "건강":     [7, 12, 21],  "운동": [7, 12, 21],
+};
+const HOUR_DEFAULT = [8, 12, 21];
+
+function benchmarkHours(topic) {
+  const t = String(topic || "");
+  for (const key of Object.keys(HOUR_BENCHMARK)) {
+    if (t.includes(key)) return HOUR_BENCHMARK[key];
+  }
+  return HOUR_DEFAULT;
+}
+
+app.get("/api/instagram/best-hours", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const since = new Date(Date.now() - 60 * 86400000).toISOString();
+  let rows = [];
+  try { rows = db.getPerfByHour(u.id, since); } catch (e) { rows = []; }
+
+  const measured = rows.reduce((n, r) => n + Number(r.posts || 0), 0);
+  const target = (() => { try { return db.getIgTarget(u.id); } catch { return null; } })();
+
+  if (measured < HOUR_MIN_POSTS) {
+    return res.json({
+      source: "benchmark",
+      hours: benchmarkHours(target && target.topic),
+      measuredPosts: measured,
+      needPosts: HOUR_MIN_POSTS,
+      note: "아직 " + measured + "건이라 업종 평균으로 알려드려요. " +
+            HOUR_MIN_POSTS + "건쯤 쌓이면 이 계정 실제 반응으로 바꿉니다.",
+    });
+  }
+
+  /* 반응이 좋았던 순서. 조회수보다 저장·클릭을 앞에 둔다 —
+     지나가며 본 것보다 뭔가를 한 쪽이 진짜 반응이다. */
+  const ranked = rows
+    .filter((r) => r.posts > 0)
+    .sort((a, b) => (b.avgActions - a.avgActions) || (b.avgViews - a.avgViews))
+    .slice(0, 3)
+    .map((r) => r.hour);
+
+  res.json({
+    source: "measured",
+    hours: ranked.length ? ranked : benchmarkHours(target && target.topic),
+    measuredPosts: measured,
+    byHour: rows,
+    note: "최근 60일 " + measured + "건의 실제 반응 기준입니다.",
+  });
+});
+
+/* ══════════════════════════════════════════════════════════════
+   제품 데모 영상 — 넥스타가 넥스타를 홍보한다
+
+   대본은 모델이 쓰고, 그림은 서버가 그린다. 캡션은 고정 틀이라 모델에게 맡기지 않는다
+   ("AI가 알아서 했다"와 "사장님은 쉬고 있었다"가 항상 들어가야 하므로).
+
+   관리자만 만들 수 있다 — 이건 우리 계정에 올릴 우리 홍보물이지 사용자 기능이 아니다.
+   ══════════════════════════════════════════════════════════════ */
+const DEMO_SCENES_MAX = 5;
+
+app.post("/api/demo/script", requireAdminUser, async (req, res) => {
+  const feature = String((req.body || {}).feature || "").trim().slice(0, 120);
+  if (!feature) return res.status(400).json({ error: "이번에 홍보할 기능을 한 줄로 적어 주세요." });
+
+  const prompt =
+    "넥스타는 'AI 직원(비비)에게 일을 시키면 알아서 해서 올려주는' 서비스다.\n" +
+    "이번에 홍보할 기능: " + feature + "\n\n" +
+    "이 기능을 쓰는 과정을 " + DEMO_SCENES_MAX + "장면으로 쪼개 세로 영상 대본을 만든다.\n" +
+    "각 장면은 title(화면에 크게 뜰 한 줄, 14자 이내)과 narration(아래 자막, 40자 이내)을 갖는다.\n" +
+    "ui는 화면 도해 종류다: 'input'(지시를 입력하는 장면) | 'agents'(비비들이 일하는 장면) | 'result'(결과가 나온 장면).\n" +
+    "uiLines는 그 도해 안에 들어갈 짧은 문구다. input이면 1개(실제 지시문), agents면 비비 이름 3개, result면 1개.\n" +
+    "featureLine은 캡션 맨 아래 들어갈 기능 한 줄 설명(30자 이내)이다.\n\n" +
+    "없는 수치나 실적을 지어내지 않는다. 과장하지 않는다.\n" +
+    "설명·인사말 없이 JSON만 출력한다:\n" +
+    '{"featureLine":"","scenes":[{"title":"","narration":"","ui":"input","uiLines":[""]}]}';
+
+  try {
+    const raw = await callWithFallback(loadModelConfig(), "전문_카피라이터", prompt, false, 1200,
+      { userId: req.adminUser.id, kind: "demo_script" });
+    const parsed = parseJSON(raw);
+    const scenes = (Array.isArray(parsed && parsed.scenes) ? parsed.scenes : [])
+      .slice(0, DEMO_SCENES_MAX)
+      .map((x) => ({
+        title: String(x.title || "").slice(0, 30),
+        narration: String(x.narration || "").slice(0, 90),
+        ui: ["input", "agents", "result"].includes(x.ui) ? x.ui : "result",
+        uiLines: (Array.isArray(x.uiLines) ? x.uiLines : []).slice(0, 3).map((t) => String(t).slice(0, 40)),
+      }))
+      .filter((x) => x.title);
+    if (!scenes.length) return res.status(502).json({ error: "대본을 못 만들었어요. 잠시 뒤 다시 시도해 주세요." });
+
+    const featureLine = String((parsed && parsed.featureLine) || feature).slice(0, 60);
+    res.json({ ok: true, scenes, featureLine, caption: buildCaption(featureLine, kstNow().hour) });
+  } catch (e) {
+    res.status(500).json({ error: "대본 생성 실패: " + e.message });
+  }
+});
+
+app.post("/api/demo/render", requireAdminUser, async (req, res) => {
+  const b = req.body || {};
+  const scenes = (Array.isArray(b.scenes) ? b.scenes : []).slice(0, DEMO_SCENES_MAX);
+  if (!scenes.length) return res.status(400).json({ error: "장면이 없습니다. 먼저 대본을 만들어 주세요." });
+
+  const slug = crypto.randomBytes(6).toString("hex");
+  const outDir = path.join(__dirname, "public", "demo", slug);
+  try {
+    await generateDemoVideo(scenes, outDir);
+    res.json({
+      ok: true,
+      videoUrl: PUBLIC_BASE_URL + "/demo/" + slug + "/demo.mp4",
+      coverUrl: PUBLIC_BASE_URL + "/demo/" + slug + "/scene1.png",
+      caption: buildCaption(b.featureLine, kstNow().hour),
+    });
+  } catch (e) {
+    fs.rmSync(outDir, { recursive: true, force: true });
+    res.status(500).json({ error: "영상 생성 실패: " + e.message });
+  }
+});
+
 /* 추천 프롬프트 — 지금 상태에서 바로 시킬 만한 것 3개.
    모델을 부르지 않고 템플릿에 값을 끼워 만든다. */
 app.get("/api/suggestions", (req, res) => {
