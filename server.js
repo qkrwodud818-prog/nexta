@@ -821,6 +821,41 @@ async function classifyBestRole(config, question, selectedKey, job) {
   }
 }
 
+/* 아무도 안 골랐을 때 총괄이 필요한 사람만 뽑는다.
+   전원을 부르면 답이 좋아지는 게 아니라 길어지기만 하고, 크레딧만 12인분 나간다. */
+const AUTO_PICK_MIN = 2;
+const AUTO_PICK_MAX = 3;
+
+function 담당자선정지시(question) {
+  const list = SPECIALIST_KEYS.map((k) => "- " + k + ": " + SPECIALISTS[k].desc).join("\n");
+  return (
+    한국어전용 +
+    "아래 [담당자 목록]에서 [질문]을 처리하는 데 꼭 필요한 사람만 고르세요.\n" +
+    "최소 " + AUTO_PICK_MIN + "명, 최대 " + AUTO_PICK_MAX + "명입니다. " +
+    "관련이 약한 사람은 넣지 마세요 — 사람이 늘어난다고 답이 좋아지지 않습니다.\n\n" +
+    "[담당자 목록]\n" + list + "\n\n" +
+    "[질문] " + question + "\n\n" +
+    "설명·인사말 없이 JSON만 출력하세요.\n" +
+    '{"roleKeys": ["담당자키", "담당자키"]}'
+  );
+}
+
+/** 실패하면 null을 돌려준다 — 호출부가 안전한 기본값으로 넘어간다. */
+async function pickAgentsFor(config, question, logCtx) {
+  try {
+    const result = await callWithFallback(config, "라우팅_분류", 담당자선정지시(question), false, 200, logCtx);
+    const parsed = parseJSON(result.text);
+    const keys = Array.isArray(parsed && parsed.roleKeys)
+      ? parsed.roleKeys.filter((k) => SPECIALISTS[k])
+      : [];
+    const uniq = [...new Set(keys)].slice(0, AUTO_PICK_MAX);
+    return uniq.length ? uniq : null;
+  } catch (e) {
+    console.warn("[담당자 자동 선정 실패]", e.message);
+    return null;
+  }
+}
+
 /* ────────────────────────── 전체 업무 진행 ────────────────────────── */
 
 async function runPipeline(job) {
@@ -3474,7 +3509,40 @@ app.post("/webhooks/instagram", async (req, res) => {
 });
 
 // 업무 시작 → 작업번호만 즉시 돌려주고, 실제 일은 뒤에서 진행
-app.post("/api/start", (req, res) => {
+/* 추천 프롬프트 — 지금 상태에서 바로 시킬 만한 것 3개.
+   모델을 부르지 않고 템플릿에 값을 끼워 만든다. */
+app.get("/api/suggestions", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const persona = (() => { try { return db.getActivePersona(u.id); } catch { return null; } })();
+  const igTarget = (() => { try { return db.getIgTarget(u.id); } catch { return null; } })();
+  const company = (u.company && u.company.name) || "";
+
+  const out = [];
+  if (persona) {
+    out.push(persona.demographic + "에게 팔 만한 아이템을 조사해줘");
+    if (persona.painPoints.length) {
+      out.push("\u201c" + persona.painPoints[0] + "\u201d을 겪는 사람이 저장할 만한 인스타 글을 써줘");
+    }
+  }
+  if (igTarget && igTarget.topic) {
+    out.push(igTarget.topic + " 계정을 키우려면 이번 주에 뭘 올려야 할지 알려줘");
+  }
+  if (company) out.push(company + "의 이번 달 마케팅 계획을 짜줘");
+
+  /* 아직 아무것도 설정 안 한 사람에게도 셋은 채워 준다 — 빈 화면이 제일 막막하다. */
+  const fallback = [
+    "우리 동네에서 인테리어 소품 가게 창업, 지금 시작해도 될지 조사해줘",
+    "요즘 20~30대에게 인기 있는 인테리어 트렌드를 알려줘",
+    "신제품 출시 인스타그램 게시글 초안을 써줘",
+  ];
+  for (const f of fallback) { if (out.length >= 3) break; if (!out.includes(f)) out.push(f); }
+
+  res.json({ suggestions: out.slice(0, 3) });
+});
+
+app.post("/api/start", async (req, res) => {
   const user = currentUser(req);
   if (!user) return res.status(401).json({ error: "로그인이 필요합니다." });
   if (!hasValidAccess(user)) {
@@ -3486,12 +3554,20 @@ app.post("/api/start", (req, res) => {
   if (question.length > 2000) return res.status(400).json({ error: "질문이 너무 깁니다. 2000자 이내로 적어 주세요." });
 
   let agentKeys = Array.isArray(req.body && req.body.agents) ? req.body.agents.filter((k) => SPECIALISTS[k]) : [];
-  // 담당자를 정확히 1명만 골랐을 때만 자동 라우팅 검토 대상 — 복수 선택·미선택(전체)은 건드리지 않는다.
+  // 담당자를 정확히 1명만 골랐을 때만 자동 라우팅 검토 대상 — 복수 선택은 이미 의도적인 선택이다.
   const routeCheck = agentKeys.length === 1;
-  if (!agentKeys.length) agentKeys = SPECIALIST_KEYS.slice();
-
+  const autoPick = agentKeys.length === 0;
   const quick = !!(req.body && req.body.quick);
-  // 빠른 모드는 총괄AI 검수를 건너뛰므로 검수 크레딧(20)을 받지 않는다.
+
+  /* 아무도 안 골랐으면 총괄이 뽑는다. 인원이 정해져야 크레딧을 계산할 수 있으므로
+     여기서 먼저 기다린다 — 안내한 금액과 실제 차감이 어긋나면 안 되기 때문이다. */
+  if (autoPick) {
+    const picked = await pickAgentsFor(loadModelConfig(), question, { userId: user.id, kind: "auto_pick" });
+    // 못 고르면 전원이 아니라 최소 인원으로 간다. 실패가 12인분 청구로 이어지면 안 된다.
+    agentKeys = picked || SPECIALIST_KEYS.slice(0, AUTO_PICK_MIN);
+  }
+
+  // 빠른 모드는 총괄AI 검수를 건너뛰므로 검수 크레딧을 받지 않는다.
   const cost = agentKeys.length * COST_PER_AGENT + (quick ? 0 : COST_MANAGER);
   if ((user.credits || 0) < cost) {
     return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다.", need: cost, have: user.credits || 0 });
@@ -3500,7 +3576,8 @@ app.post("/api/start", (req, res) => {
   const job = createJob(question, agentKeys, user.id, cost, quick);
   job.routeCheck = routeCheck;
   safeCreateJobLog(job.id, user.id, "pipeline", question, agentKeys, new Date().toISOString());
-  res.json({ jobId: job.id, cost });
+  // 총괄이 누구를 불렀는지 화면이 바로 알 수 있게 같이 돌려준다.
+  res.json({ jobId: job.id, cost, agents: agentKeys, autoPicked: autoPick });
   runPipeline(job);
 });
 

@@ -584,6 +584,46 @@
   .ig-post .rm:hover{ background:#f1f3f8; color:var(--red); }
   .ig-empty{ color:var(--soft); font-size:13.5px; text-align:center; padding:30px 0; }
 
+  /* 페르소나 — 불편 항목은 여러 줄이라 칩으로 쌓는다 */
+  .pp-list{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .pp-chip{ display:flex; align-items:center; gap:6px; background:var(--wash); color:var(--brand-ink,#4535e0);
+    border-radius:999px; padding:4px 10px; font-size:12.5px; }
+  .pp-chip button{ border:none; background:none; color:inherit; cursor:pointer; font-size:14px;
+    line-height:1; padding:0; opacity:.65; }
+  .pp-chip button:hover{ opacity:1; }
+  .pp-add{ display:flex; gap:6px; margin-top:8px; }
+  .pp-add input{ flex:1; }
+  .pp-add button{ flex-shrink:0; padding:0 14px; border:1px solid var(--line); background:#fff;
+    border-radius:var(--r-1); font-size:13px; font-weight:700; color:var(--soft); cursor:pointer; }
+  .pp-add button:hover{ border-color:var(--purple); color:var(--purple); }
+  .goal-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:7px; margin-top:8px; }
+  .goal-grid label{ display:flex; align-items:center; gap:7px; margin:0; padding:8px 10px;
+    border:1px solid var(--line); border-radius:var(--r-1); font-size:12.5px; font-weight:600;
+    cursor:pointer; }
+  .goal-grid label:has(input:checked){ border-color:var(--purple); background:var(--wash); color:var(--purple); }
+  .goal-grid input{ width:auto; margin:0; }
+  .persona-now{ background:var(--wash); border-radius:var(--r-1); padding:11px 13px; font-size:12.5px;
+    line-height:1.6; margin-bottom:12px; }
+  .persona-now b{ font-weight:700; }
+
+  /* 유입 vs 전환 — 나란히 놓아야 한쪽이 비어 있는 게 보인다 */
+  .perf-pair{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media(max-width:640px){ .perf-pair{ grid-template-columns:1fr; } }
+  .perf-col{ background:#fff; border:1px solid var(--line); border-radius:var(--r-2); padding:14px 16px; }
+  .perf-col.convert{ border-color:#d5d1fb; }
+  .perf-col h4{ font-family:var(--f-display); font-size:12px; font-weight:700; letter-spacing:.08em;
+    color:var(--soft); margin:0 0 10px; }
+  .perf-col.convert h4{ color:var(--purple); }
+  .perf-row{ display:flex; align-items:baseline; justify-content:space-between; gap:10px; padding:5px 0; }
+  .perf-row .lb{ font-size:12.5px; color:var(--soft); }
+  .perf-row .vl{ font-family:var(--f-data); font-variant-numeric:tabular-nums; font-size:16px;
+    font-weight:600; color:var(--ink); }
+  .perf-row .vl.zero{ color:var(--faint,#9aa4bb); font-weight:500; }
+  .perf-note{ display:flex; gap:9px; align-items:flex-start; background:var(--wash); border-radius:var(--r-1);
+    padding:11px 13px; font-size:12.5px; line-height:1.6; margin-top:12px; }
+  .perf-note b{ font-weight:700; }
+  .perf-note.quiet{ background:var(--bg); color:var(--soft); }
+
   /* ══════ SCREEN 9 — 관리자 ══════ */
   #screen9 .main-content{ background:var(--bg); }
   .ad-tabs{ display:flex; gap:6px; margin-bottom:18px; flex-wrap:wrap; }
@@ -959,6 +999,7 @@
     <div class="ad-tabs">
       <button class="ad-tab on" data-pane="adUse">사용 현황</button>
       <button class="ad-tab" data-pane="adOps">운영</button>
+      <button class="ad-tab" data-pane="adCost">비용</button>
       <button class="ad-tab" data-pane="adIp">가입 IP</button>
     </div>
 
@@ -988,6 +1029,15 @@
       <div class="ad-box">
         <h3>추천 코드</h3>
         <div id="adReferrals"><div class="ig-empty">코드가 없어요.</div></div>
+      </div>
+    </div>
+
+    <div class="ad-pane" id="adCost">
+      <div class="ad-box">
+        <h3>비비별 API 사용량</h3>
+        <div id="adCostList"><div class="ig-empty">아직 호출 기록이 없어요.</div></div>
+        <div class="ad-note">실제로 나간 돈입니다. 크레딧 단가가 원가와 맞는지 여기서 확인하세요 —
+          어긋나면 남거나 밑집니다.</div>
       </div>
     </div>
 
@@ -1031,6 +1081,35 @@
             <div class="ig-actions">
               <button class="bigbtn go" id="igConnBtn" style="flex:1;">연결하기</button>
             </div>
+          </div>
+        </div>
+
+        <div class="t-label" style="margin:22px 0 12px;">타겟 정하기</div>
+        <div class="ig-box">
+          <div class="persona-now" id="personaNow" style="display:none;"></div>
+
+          <label for="pDemo">누구에게 팔 건가요</label>
+          <input id="pDemo" placeholder="예: 30대 워킹맘, 육아휴직 중">
+          <div class="ig-hint">좁을수록 좋아요. “여성”보다 “복직 앞둔 육아휴직 3년차”가 훨씬 잘 먹힙니다.</div>
+
+          <label>그 사람이 겪는 불편</label>
+          <div class="pp-add">
+            <input id="pPainInput" placeholder="예: 시간이 없다" onkeydown="if(event.key==='Enter'){event.preventDefault();addPain();}">
+            <button type="button" onclick="addPain()">추가</button>
+          </div>
+          <div class="pp-list" id="pPainList"></div>
+          <div class="ig-hint">최대 5개. 이 불편이 “모으는 콘텐츠”의 소재가 됩니다.</div>
+
+          <label>어떻게 돈을 벌 계획인가요</label>
+          <div class="goal-grid" id="pGoals"></div>
+
+          <label style="display:flex;align-items:center;gap:8px;font-weight:600;">
+            <input type="checkbox" id="pHasProduct" style="width:auto;"> 이미 파는 상품이 있어요
+          </label>
+          <input id="pProduct" placeholder="무엇을 파나요?" style="display:none;margin-top:8px;">
+
+          <div class="ig-actions">
+            <button class="bigbtn go" id="pSaveBtn" style="flex:1;">타겟 저장</button>
           </div>
         </div>
 
@@ -1090,6 +1169,21 @@
           </div>
           <div class="ig-spark" id="igSpark"></div>
           <div class="ig-hint" id="igGrowthNote">계정을 연결하고 새로고침하면 팔로워 추이가 쌓입니다.</div>
+        </div>
+
+        <div class="t-label" style="margin:22px 0 12px;">콘텐츠 성과</div>
+        <div class="ig-box">
+          <div class="perf-pair">
+            <div class="perf-col">
+              <h4>유입 · 모으는 콘텐츠</h4>
+              <div id="perfAttract"></div>
+            </div>
+            <div class="perf-col convert">
+              <h4>전환 · 파는 콘텐츠</h4>
+              <div id="perfConvert"></div>
+            </div>
+          </div>
+          <div id="perfNote"></div>
         </div>
 
         <div class="t-label" style="margin:22px 0 12px;">올릴 예정</div>
@@ -1643,11 +1737,28 @@ function renderAdminOps(orders, refs){
   }).join('') : adEmpty('코드가 없어요.');
 }
 
+var USD = String.fromCharCode(36);
+function renderAdminCost(rows){
+  var box = document.getElementById('adCostList');
+  if(!box) return;
+  if(!rows || !rows.length){ box.innerHTML = adEmpty('아직 호출 기록이 없어요.'); return; }
+  var maxUsd = Math.max.apply(null, rows.map(function(r){ return Number(r.costUsd || r.cost_usd || 0); }).concat([0.000001]));
+  box.innerHTML = rows.map(function(r){
+    var usd = Number(r.costUsd || r.cost_usd || 0);
+    var calls = r.calls || 0, tok = r.totalTokens || r.total_tokens || 0;
+    return '<div class="ad-bar"><span class="nm">' + esc(r.roleKey || r.role_key || '') + '</span>'
+      + '<span class="tr"><i style="width:' + Math.round(usd / maxUsd * 100) + '%"></i></span>'
+      + '<span class="ct" style="width:auto;">' + calls + '회 · ' + tok.toLocaleString()
+      + '토큰 · ' + USD + usd.toFixed(4) + '</span></div>';
+  }).join('');
+}
+
 function loadAdmin(){
   igApi('/api/admin/insight?days=7').then(renderAdminInsight).catch(function(e){
     document.getElementById('adStatCards').innerHTML = adEmpty(e.message);
   });
   igApi('/api/admin/ip').then(renderAdminIp).catch(function(){});
+  igApi('/api/admin/insight?days=30').then(function(d){ renderAdminCost(d.costByRole); }).catch(function(){});
   Promise.all([
     igApi('/api/admin/bank-orders').catch(function(){ return {}; }),
     igApi('/api/admin/referrals').catch(function(){ return {}; })
@@ -1775,6 +1886,126 @@ function renderIgConn(connected){
   };
 })();
 
+/* ══════ 콘텐츠 성과 — 유입 vs 전환 ══════ */
+function perfRows(items){
+  return items.map(function(r){
+    var zero = !r.v;
+    return '<div class="perf-row"><span class="lb">' + esc(r.l) + '</span>'
+      + '<span class="vl' + (zero ? ' zero' : '') + '">' + (r.v || 0).toLocaleString() + '</span></div>';
+  }).join('');
+}
+function renderPerformance(d){
+  var a = d.attract || {}, c = d.convert || {};
+  document.getElementById('perfAttract').innerHTML = perfRows([
+    { l:'게시물', v:a.posts }, { l:'조회수', v:a.views },
+    { l:'팔로워 순증', v:a.followerDelta }, { l:'저장·공유', v:a.saves }
+  ]);
+  document.getElementById('perfConvert').innerHTML = perfRows([
+    { l:'게시물', v:c.posts }, { l:'조회수', v:c.views },
+    { l:'링크 클릭', v:c.linkClicks }, { l:'문의·신청', v:c.leads }
+  ]);
+
+  /* 비비의 한 줄. 제안일 뿐이고 비중을 자동으로 바꾸지는 않는다. */
+  var box = document.getElementById('perfNote');
+  if(d.suggestion){
+    box.innerHTML = '<div class="perf-note"><span>💡</span><span><b>비비 의견</b> — '
+      + esc(d.suggestion.message)
+      + '<br><span style="color:var(--soft);">비중은 위 “주당 게시물”과 “릴스 비율”에서 직접 바꾸시면 돼요. 저희가 마음대로 바꾸지 않습니다.</span></span></div>';
+  } else if((a.posts || 0) + (c.posts || 0) === 0){
+    box.innerHTML = '<div class="perf-note quiet">아직 발행된 게시물이 없어요. 올라가기 시작하면 여기에 쌓입니다.</div>';
+  } else {
+    box.innerHTML = '<div class="perf-note quiet">최근 ' + d.days + '일 기준입니다. 판단할 만큼 쌓이면 비비가 의견을 냅니다.</div>';
+  }
+}
+function loadPerformance(){
+  igApi('/api/instagram/performance?days=14').then(renderPerformance).catch(function(){});
+}
+
+/* ══════ 타겟 페르소나 ══════ */
+var GOAL_LABELS = {
+  affiliate: '제휴 링크', group_buy: '공동구매', digital_product: '전자책·강의',
+  agency_lead: '대행 문의', ad_brand_deal: '광고·협찬'
+};
+var painPoints = [];
+
+function renderPains(){
+  var box = document.getElementById('pPainList');
+  if(!box) return;
+  box.innerHTML = painPoints.map(function(t, i){
+    return '<span class="pp-chip">' + esc(t) + '<button type="button" data-pain="' + i + '" title="빼기">×</button></span>';
+  }).join('');
+  box.querySelectorAll('[data-pain]').forEach(function(b){
+    b.onclick = function(){ painPoints.splice(parseInt(b.getAttribute('data-pain'), 10), 1); renderPains(); };
+  });
+}
+function addPain(){
+  var el = document.getElementById('pPainInput');
+  var v = el.value.trim();
+  if(!v) return;
+  if(painPoints.length >= 5){ alert('불편은 5개까지만 담아요. 많아지면 콘텐츠 초점이 흐려집니다.'); return; }
+  painPoints.push(v.slice(0, 80));
+  el.value = '';
+  renderPains();
+}
+
+(function initPersonaForm(){
+  var g = document.getElementById('pGoals');
+  if(!g) return;
+  g.innerHTML = Object.keys(GOAL_LABELS).map(function(k){
+    return '<label><input type="checkbox" value="' + k + '">' + GOAL_LABELS[k] + '</label>';
+  }).join('');
+  var hp = document.getElementById('pHasProduct');
+  hp.onchange = function(){ document.getElementById('pProduct').style.display = hp.checked ? 'block' : 'none'; };
+})();
+
+function renderPersona(p){
+  var now = document.getElementById('personaNow');
+  if(!now) return;
+  if(!p){ now.style.display = 'none'; return; }
+  now.style.display = 'block';
+  now.innerHTML = '지금 타겟: <b>' + esc(p.demographic) + '</b>'
+    + (p.painPoints.length ? '<br>불편 — ' + esc(p.painPoints.join(', ')) : '')
+    + (p.monetizationGoals.length
+        ? '<br>수익화 — ' + esc(p.monetizationGoals.map(function(k){ return GOAL_LABELS[k] || k; }).join(', '))
+        : '');
+  /* 저장된 값을 폼에도 되돌려 넣는다 — 고치려는 사람이 처음부터 다시 쓰게 두지 않는다 */
+  document.getElementById('pDemo').value = p.demographic || '';
+  painPoints = (p.painPoints || []).slice();
+  renderPains();
+  document.querySelectorAll('#pGoals input').forEach(function(c){
+    c.checked = (p.monetizationGoals || []).indexOf(c.value) >= 0;
+  });
+  var hp = document.getElementById('pHasProduct');
+  hp.checked = !!p.hasProduct;
+  var pd = document.getElementById('pProduct');
+  pd.style.display = hp.checked ? 'block' : 'none';
+  pd.value = p.productDescription || '';
+}
+
+function loadPersona(){
+  igApi('/api/persona').then(function(d){ renderPersona(d.active); }).catch(function(){});
+}
+
+(function bindPersonaSave(){
+  var btn = document.getElementById('pSaveBtn');
+  if(!btn) return;
+  btn.onclick = function(){
+    var demo = document.getElementById('pDemo').value.trim();
+    if(!demo){ alert('누구에게 팔 건지 적어 주세요.'); return; }
+    if(!painPoints.length){ alert('그 사람이 겪는 불편을 하나 이상 적어 주세요.'); return; }
+    var goals = Array.prototype.slice.call(document.querySelectorAll('#pGoals input:checked'))
+      .map(function(c){ return c.value; });
+    btn.disabled = true;
+    igApi('/api/persona', {
+      demographic: demo, painPoints: painPoints, monetizationGoals: goals,
+      hasProduct: document.getElementById('pHasProduct').checked,
+      productDescription: document.getElementById('pProduct').value.trim()
+    }).then(function(d){ celebrate('타겟을 저장했어요'); renderPersona(d.persona); })
+      .catch(function(e){ alert(e.message); })
+      .then(function(){ btn.disabled = false; });
+  };
+})();
+
 /* ══════ 인스타 키우기 ══════ */
 /* 이 파일에는 공용 요청 헬퍼가 없고 raw fetch를 쓴다. CSRF 토큰은 전역에서 fetch를
    가로채 붙여 주므로 여기서는 신경 쓰지 않는다. */
@@ -1893,6 +2124,8 @@ function applyIg(d){
 }
 
 function loadInstagram(){
+  loadPersona();
+  loadPerformance();
   igApi('/api/instagram/overview').then(applyIg).catch(function(e){ console.warn(e); });
 }
 
@@ -2509,21 +2742,24 @@ function showLearned(){
 }
 
 /* ══════ 예시 · 템플릿 ══════ */
-var EXAMPLES = [
-  '우리 동네에서 인테리어 소품 가게 창업, 지금 시작해도 될지 조사해줘',
-  '요즘 20~30대에게 인기 있는 인테리어 트렌드를 알려줘',
-  '신제품 출시 인스타그램 게시글 초안을 써줘'
-];
-(function(){
+/* 추천 프롬프트 — 서버가 지금 상태(타겟·계정 주제·회사)에 맞춰 3개를 만들어 준다.
+   눌러서 넣든 직접 쓰든 처리 경로는 같다 — 총괄 비비가 읽고 담당자를 정한다. */
+function renderSuggestions(list){
   var box = document.getElementById('examples');
-  box.innerHTML = '<span style="font-size:12px;color:var(--soft);align-self:center;">예시:</span>';
-  EXAMPLES.forEach(function(t){
+  if(!box) return;
+  box.innerHTML = '<span style="font-size:12px;color:var(--soft);align-self:center;">이런 걸 시켜보세요:</span>';
+  list.forEach(function(t){
     var c=document.createElement('span'); c.className='chip';
-    c.textContent = t.length>22 ? t.slice(0,22)+'…' : t; c.title=t;
+    c.textContent = t.length>24 ? t.slice(0,24)+'…' : t; c.title=t;
     c.onclick=function(){ qEl.value=t; qEl.focus(); qEl.dispatchEvent(new Event('input')); };
     box.appendChild(c);
   });
-})();
+}
+function loadSuggestions(){
+  fetch('/api/suggestions').then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){ if(d && d.suggestions) renderSuggestions(d.suggestions); })
+    .catch(function(){});
+}
 var TPL_KEY='officeTemplates_v1';
 function loadTemplates(){ try{ return JSON.parse(localStorage.getItem(TPL_KEY)||'[]')||[]; }catch(e){ return []; } }
 function saveTemplates(l){ try{ localStorage.setItem(TPL_KEY, JSON.stringify(l)); }catch(e){} }
@@ -3580,7 +3816,7 @@ function checkAuth(){
     .then(function(d){
       COST.perAgent=d.costPerAgent; COST.manager=d.costManager;
       renderCredits(d.user); updateCostEst(); goTo('screen2'); maybeAskCompany(); loadSubscriptionConfig(); loadBankTransferConfig();
-      applyBookmarkletImport(); refreshAdminNav(); rollGreeting();
+      applyBookmarkletImport(); refreshAdminNav(); rollGreeting(); loadSuggestions();
     })
     .catch(function(){ goTo('screen1'); });
 }
