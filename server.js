@@ -2091,6 +2091,17 @@ app.post("/api/instagram/plan", async (req, res) => {
     "hook은 첫 화면에 크게 들어갈 한 줄이라 18자를 넘기지 않는다.\n" +
     "bullets는 카드 본문에 들어갈 짧은 문장 3개.\n" +
     "caption은 인스타 본문(2~3문장) + 해시태그 5개.\n\n" +
+
+    /* 제품을 파는 쇼츠는 네 박자로 간다. 잘 되는 제품 쇼츠를 뜯어보면 대체로 이 순서고,
+       순서가 흐트러지면 "좋은 물건이네"에서 끝나고 누르지 않는다.
+       bullets 3개가 앞의 세 박자, caption 첫 줄이 마지막 박자다. */
+    "[릴스(reels)일 때는 bullets를 이 네 박자로 쓴다]\n" +
+    "  1) 문제 — 보는 사람이 실제로 겪는 불편을 눈에 보이게 (\"수세미로 문질러도 안 지워지죠\")\n" +
+    "  2) 해결 — 그래서 뭘 하면 되는지 (\"뿌리고 5분만 기다리면 됩니다\")\n" +
+    "  3) 차별점 — 왜 다른 것과 다른지 한 마디 (\"문지르는 게 아니라 녹여내는 거예요\")\n" +
+    "  caption 첫 줄은 다음 행동 한 줄로 시작한다 (\"프로필 링크에서 확인하세요\").\n" +
+    "  비포/애프터 대비가 눈에 보이는 소재일수록 잘 걸린다 — 변화가 안 보이면 이 형식을 쓰지 않는다.\n\n" +
+
     "설명·인사말 없이 JSON만 출력한다: " +
     '{"posts":[{"kind":"cardnews|reels","title":"내부 제목","hook":"첫 화면 한 줄","bullets":["","",""],"caption":"본문 + 해시태그"}]}';
 
@@ -3128,6 +3139,28 @@ app.post("/api/social/wordpress/post", async (req, res) => {
 const { createClassifier } = require("./social/video/classifier");
 const videoPipeline = require("./social/video");
 
+/* 재활용(REPURPOSE)은 "내가 가진 영상을 짧게 자른다"는 기능이다.
+   남의 틱톡·유튜브·릴스 주소를 넣어 새 영상으로 만들어 올리는 건 저작권 침해이고,
+   플랫폼 쪽에서도 재사용 콘텐츠로 걸려 계정이 정지된다. 우리가 권리를 확인해 줄 방법은
+   없지만, 최소한 남의 플랫폼 주소가 그대로 들어오는 건 막는다. */
+const FOREIGN_VIDEO_HOSTS = [
+  "tiktok.com", "douyin.com", "youtube.com", "youtu.be", "instagram.com",
+  "facebook.com", "kuaishou.com", "xiaohongshu.com", "bilibili.com",
+];
+function safeSourceVideoUrl(raw) {
+  if (!raw) return undefined;
+  let u;
+  try { u = new URL(String(raw)); } catch { throw new Error("원본 영상 주소가 올바르지 않습니다."); }
+  const host = u.hostname.replace(/^www./, "").toLowerCase();
+  if (FOREIGN_VIDEO_HOSTS.some((h) => host === h || host.endsWith("." + h))) {
+    throw new Error(
+      "재활용에는 직접 촬영했거나 사용 권리가 있는 영상만 넣을 수 있습니다. " +
+      "틱톡·유튜브·인스타그램 등 남의 게시물 주소는 쓸 수 없어요 — 저작권 침해이고 계정이 정지됩니다."
+    );
+  }
+  return String(raw);
+}
+
 const classifyVideo = createClassifier({ callWithFallback, parseJSON, loadModelConfig });
 
 const USD_TO_KRW = Number(process.env.USD_TO_KRW) || 1380; // 마진 계산용 환율(대략치)
@@ -3246,7 +3279,7 @@ app.post("/api/video/generate", async (req, res) => {
       script: b.script ? String(b.script).slice(0, 3000) : undefined,
       aspectRatio: "9:16",
       durationSec: Math.min(60, Math.max(5, parseInt(b.durationSec, 10) || 15)),
-      sourceVideoUrl: b.sourceVideoUrl ? String(b.sourceVideoUrl) : undefined,
+      sourceVideoUrl: safeSourceVideoUrl(b.sourceVideoUrl),
       logCtx: { userId: u.id, jobId: "vid_" + Date.now().toString(36) },
     },
     classifyVideo,
