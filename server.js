@@ -19,7 +19,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 require("dotenv").config();
 
-const { generateCardNews } = require("./social/cardnews");
+const { generateCardNews, STYLES: CARD_STYLES, DEFAULT_STYLE: CARD_DEFAULT_STYLE } = require("./social/cardnews");
 const { generateShort } = require("./social/shorts");
 const { generateDemoVideo, buildCaption } = require("./social/demo-video");
 const { publishCarouselPost, publishReel, fetchProfileStats, verifyWebhook, handleCommentWebhook } = require("./social/instagram");
@@ -337,7 +337,7 @@ function getOrCreateDeviceId(req, res) {
 // 브라우저 쿠키를 쓰지 않으므로 검사 대상에서 제외한다.
 // /api/admin/*은 쿠키 세션이 아니라 별도 비밀키(ADMIN_KEY)로 보호되므로 CSRF 대상이 아니다
 // (공격자 페이지가 그 키 값을 알 방법이 없어 위조 요청을 만들 수 없다).
-const CSRF_EXEMPT_PATHS = new Set(["/api/signup", "/api/login", "/webhooks/instagram"]);
+const CSRF_EXEMPT_PATHS = new Set(["/api/signup", "/api/login", "/webhooks/instagram", "/webhooks/paddle"]);
 function isCsrfExempt(path) {
   return CSRF_EXEMPT_PATHS.has(path) || path.indexOf("/api/admin/") === 0;
 }
@@ -1105,6 +1105,8 @@ async function runCoupangAutoJob(job, params) {
           photoUrl: imageUrl,
           commentKeyword,
           cta: v.cta,
+          // 이 흐름은 제휴 상품 카드뉴스라 고지문구가 필요하다.
+          disclosure: AFFILIATE_DISCLOSURE,
         },
         outDir
       );
@@ -1570,6 +1572,150 @@ app.get("/api/subscription/billing-success", async (req, res) => {
   }
 });
 
+/* ══════════════════════════════════════════════════════════════
+   Paddle 결제 (사업자등록 없이 자동결제)
+
+   흐름: 브라우저가 Paddle 결제창을 열고 → 결제되면 Paddle이 우리 서버로 웹훅을 쏜다
+   → 서명을 확인한 뒤 그때 크레딧을 넣는다.
+
+   설정값 (Render 환경변수):
+     PADDLE_CLIENT_TOKEN   결제창을 여는 공개 토큰 (test_/live_ 로 시작, 브라우저에 노출돼도 되는 값)
+     PADDLE_WEBHOOK_SECRET 웹훅 서명 검증용 비밀키
+     PADDLE_PRICE_STANDARD 스탠다드 요금제의 Paddle price id (pri_...)
+     PADDLE_PRICE_PRO      프로 요금제의 price id
+     PADDLE_ENV            sandbox | production (기본 production)
+   ══════════════════════════════════════════════════════════════ */
+const PADDLE = {
+  clientToken: process.env.PADDLE_CLIENT_TOKEN || "",
+  webhookSecret: process.env.PADDLE_WEBHOOK_SECRET || "",
+  env: (process.env.PADDLE_ENV || "production").toLowerCase() === "sandbox" ? "sandbox" : "production",
+  priceIds: {
+    standard: process.env.PADDLE_PRICE_STANDARD || "",
+    pro: process.env.PADDLE_PRICE_PRO || "",
+  },
+};
+const paddleReady = () => !!(PADDLE.clientToken && PADDLE.priceIds.standard);
+
+/** 프론트가 결제 버튼을 띄울지 판단하는 값. 비밀키는 절대 내려보내지 않는다. */
+app.get("/api/paddle/config", (req, res) => {
+  res.json({
+    enabled: paddleReady(),
+    clientToken: PADDLE.clientToken,   // 공개 토큰 — 브라우저에 노출되도록 설계된 값이다
+    environment: PADDLE.env,
+    priceIds: PADDLE.priceIds,
+  });
+});
+
+/* 결제창을 열기 직전에 부른다. 누가 무엇을 사려는지 서버가 먼저 확인하고,
+   나중에 웹훅이 왔을 때 대조할 수 있도록 사용자 id를 실어 보낸다. */
+app.post("/api/paddle/checkout", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!paddleReady()) return res.status(503).json({ error: "아직 카드 결제가 준비되지 않았습니다. 무통장입금을 이용해 주세요." });
+
+  const planKey = String((req.body || {}).plan || "");
+  const plan = SUBSCRIPTION_PLANS[planKey];
+  const priceId = PADDLE.priceIds[planKey];
+  if (!plan || !priceId) return res.status(400).json({ error: "요금제를 골라 주세요." });
+
+  res.json({
+    ok: true,
+    priceId,
+    // customData는 웹훅에 그대로 돌아온다 — 이걸로 "누구의 결제인지"를 잇는다.
+    customData: { userId: u.id, plan: plan.key },
+    customer: { email: u.email || undefined },
+  });
+});
+
+/* ── 웹훅 ────────────────────────────────────────────────────
+   Paddle-Signature: ts=<유닉스시각>;h1=<서명>
+   서명 대상은 "<ts>:<원본 본문>"이고, 본문을 한 글자라도 건드리면 안 맞는다.
+   그래서 express.json의 verify에서 받아둔 req.rawBody를 쓴다. */
+function verifyPaddleSignature(req) {
+  if (!PADDLE.webhookSecret) return { ok: false, why: "PADDLE_WEBHOOK_SECRET이 설정되지 않았습니다." };
+  const header = req.get("Paddle-Signature") || "";
+  const parts = Object.fromEntries(
+    header.split(";").map((kv) => kv.split("=")).filter((a) => a.length === 2)
+  );
+  const ts = parts.ts, h1 = parts.h1;
+  if (!ts || !h1) return { ok: false, why: "서명 헤더 형식이 아닙니다." };
+
+  // 오래된 요청은 거부한다 — 가로챈 요청을 나중에 되쏘는 걸 막는다(5분).
+  const age = Math.abs(Date.now() / 1000 - Number(ts));
+  if (!Number.isFinite(age) || age > 300) return { ok: false, why: "서명 시각이 너무 오래되었습니다." };
+
+  const raw = req.rawBody;
+  if (!raw) return { ok: false, why: "원본 본문을 읽지 못했습니다." };
+
+  const expected = crypto.createHmac("sha256", PADDLE.webhookSecret)
+    .update(Buffer.concat([Buffer.from(ts + ":", "utf8"), raw]))
+    .digest("hex");
+  if (!timingSafeStringEqual(expected, h1)) return { ok: false, why: "서명이 맞지 않습니다." };
+  return { ok: true };
+}
+
+/** 구독을 켜거나 연장한다. 결제 성공 웹훅에서만 부른다. */
+function activatePaddleSubscription(userId, planKey, subscriptionId) {
+  const user = db.getUserById(userId);
+  if (!user) return false;
+  const plan = SUBSCRIPTION_PLANS[planKey] || SUBSCRIPTION_PLANS.standard;
+
+  const now = new Date();
+  const periodEnd = new Date(now.getTime() + SUBSCRIPTION_PERIOD_MS).toISOString();
+  db.upsertSubscription(userId, {
+    billingKeyEnc: "",              // Paddle이 카드를 보관한다 — 우리는 갖지 않는다
+    customerKey: subscriptionId || "",
+    status: "active",
+    plan: plan.key,
+    currentPeriodEnd: periodEnd,
+    canceledAt: null,
+    lastPaymentAt: now.toISOString(),
+    lastFailureReason: null,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  });
+  const credits = (user.credits || 0) + plan.credits;
+  db.updateCredits(userId, credits, credits);
+  db.setAccessUntil(userId, periodEnd);
+  return true;
+}
+
+app.post("/webhooks/paddle", (req, res) => {
+  const v = verifyPaddleSignature(req);
+  if (!v.ok) {
+    console.warn("[Paddle 웹훅 거부]", v.why);
+    return res.status(401).json({ error: v.why });
+  }
+
+  const body = req.body || {};
+  const type = String(body.event_type || "");
+  const data = body.data || {};
+  const custom = data.custom_data || (data.transaction && data.transaction.custom_data) || {};
+  const userId = custom.userId;
+  const planKey = custom.plan;
+
+  /* 돈이 실제로 들어온 사건만 크레딧으로 바꾼다.
+     subscription.created는 "구독이 만들어졌다"일 뿐이라 결제 완료와 다르다. */
+  const PAID = ["transaction.completed", "subscription.activated", "subscription.updated"];
+  try {
+    if (PAID.includes(type) && userId) {
+      const ok = activatePaddleSubscription(userId, planKey, data.subscription_id || data.id);
+      console.log("[Paddle]", type, userId, ok ? "적용" : "사용자 없음");
+    } else if (type === "subscription.canceled" && userId) {
+      const sub = db.getSubscription(userId);
+      if (sub) db.updateSubscriptionFields(userId, { status: "canceled", canceledAt: new Date().toISOString() });
+      console.log("[Paddle] 구독 취소", userId);
+    } else {
+      console.log("[Paddle] 처리하지 않는 이벤트:", type);
+    }
+  } catch (e) {
+    console.error("[Paddle 웹훅 처리 실패]", type, e.message);
+  }
+
+  // Paddle에는 항상 200으로 답한다 — 실패를 알리면 계속 재전송되어 중복 지급 위험이 커진다.
+  res.json({ ok: true });
+});
+
 // 구독 취소 — 즉시 끊지 않는다. 이미 낸 기간(current_period_end)까지는 그대로 쓰고,
 // 다음 자동 재청구만 걸리지 않게 한다.
 app.post("/api/subscription/cancel", (req, res) => {
@@ -1701,6 +1847,8 @@ app.post("/api/social/cardnews", async (req, res) => {
         cta: p.cta,
         color1: p.color1,
         color2: p.color2,
+        // 제휴 상품 카드뉴스가 기본. 제휴가 아니면 호출부가 affiliate:false로 끈다.
+        disclosure: p.affiliate === false ? "" : AFFILIATE_DISCLOSURE,
       },
       outDir
     );
@@ -1938,7 +2086,7 @@ function kstSlotInDays(n, hour) {
 function igTargetOrDefault(userId) {
   return db.getIgTarget(userId) || {
     topic: "", audience: "", tone: "친근함", hashtags: "",
-    postsPerWeek: 5, reelRatio: 40, hour: 19, enabled: false,
+    postsPerWeek: 5, reelRatio: 40, hour: 19, enabled: false, style: CARD_DEFAULT_STYLE,
   };
 }
 
@@ -1951,6 +2099,7 @@ app.get("/api/instagram/overview", (req, res) => {
     posts: db.listIgPosts(u.id, 40),
     growth: db.listIgGrowth(u.id, 30),
     cost: { cardnews: COST_IG_CARDNEWS, reels: COST_IG_REELS },
+    styles: Object.keys(CARD_STYLES).map((k) => ({ key: k, label: CARD_STYLES[k].label, color: CARD_STYLES[k].color1 })),
   });
 });
 
@@ -1975,6 +2124,8 @@ app.post("/api/instagram/target", (req, res) => {
     reelRatio: Math.max(0, Math.min(100, parseInt(b.reelRatio, 10) || 40)),
     hour: Math.max(0, Math.min(23, parseInt(b.hour, 10) || 19)),
     enabled,
+    // 모르는 이름이 오면 기본값으로 떨어뜨린다 — 렌더러가 또 걸러내지만, DB에 쓰레기를 남기지 않는다.
+    style: CARD_STYLES[String(b.style || "")] ? String(b.style) : CARD_DEFAULT_STYLE,
   });
   res.json({ ok: true, target: db.getIgTarget(u.id) });
 });
@@ -1998,6 +2149,20 @@ const CONVERT_KEYS = Object.keys(CONTENT_PURPOSES).filter((k) => CONTENT_PURPOSE
 const ATTRACT_RATIO = 0.8; // 4:1
 
 const MONETIZATION_TYPES = ["affiliate", "group_buy", "digital_product", "agency_lead", "ad_brand_deal"];
+
+/* 제휴 수수료를 받는 게시물에는 표시광고법상 고지가 있어야 한다. 받지 않는 글에 붙이면
+   그건 그것대로 거짓말이라, 붙일지 말지는 항상 호출부가 정한다. */
+const AFFILIATE_DISCLOSURE = "이 포스팅은 제휴 마케팅 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.";
+
+/* 레퍼런스로 쓸 "터진 글"의 기준.
+   4배는 유튜브 기획에서 흔히 쓰는 값이고, 인스타에서도 이 정도면 우연이 아니라 형태가 먹힌 것으로 본다.
+   60일은 그보다 오래되면 흐름이 지나 참고 가치가 떨어져서다. */
+const BREAKOUT_MIN_MULTIPLE = 4;
+const BREAKOUT_WINDOW_DAYS = 60;
+
+function isoDaysAgo(days) {
+  return new Date(Date.now() - days * 86400000).toISOString();
+}
 
 /** n개를 4:1로 나눠 목적을 배정한다. 같은 목적만 몰리지 않게 종류를 돌려 쓴다. */
 function assignPurposes(n) {
@@ -2080,12 +2245,27 @@ app.post("/api/instagram/plan", async (req, res) => {
     .map((k, idx) => (idx + 1) + "번: " + CONTENT_PURPOSES[k].label + " — " + CONTENT_PURPOSES[k].hint)
     .join("\n");
 
+  /* 이미 내 계정에서 터진 글이 있으면 그걸 먼저 보여준다.
+     맨땅에서 창작하게 두는 것보다, 이 계정에서 실제로 먹힌 형태를 다시 쓰는 편이 훨씬 잘 맞는다.
+     기준을 최근 두 달로 자르는 이유는 그보다 오래된 건 이미 흐름이 지나 있어서다. */
+  const breakouts = db.getBreakoutPosts(
+    u.id, isoDaysAgo(BREAKOUT_WINDOW_DAYS), BREAKOUT_MIN_MULTIPLE, 3
+  );
+  const referenceBlock = breakouts.length
+    ? "\n[이 계정에서 실제로 터진 글 — 형태를 참고하되 내용은 베끼지 않는다]\n" +
+      breakouts.map((r) =>
+        "- \"" + r.hook + "\" (" + (r.kind === "reels" ? "릴스" : "카드뉴스") + ", 평균 대비 " + r.multiple + "배)"
+      ).join("\n") +
+      "\n왜 걸렸는지 짐작해서 그 구조(문장 길이, 시작하는 방식, 다루는 각도)를 이번 것에도 쓴다.\n"
+    : "";
+
   const prompt =
     "너는 인스타그램 계정을 키우는 콘텐츠 기획자다.\n" +
     personaBlock +
     "계정 주제: " + t.topic + "\n" +
     "말투: " + t.tone + "\n" +
-    "만들 개수: " + want + "개 (이 중 " + reels + "개는 릴스, 나머지는 카드뉴스)\n\n" +
+    "만들 개수: " + want + "개 (이 중 " + reels + "개는 릴스, 나머지는 카드뉴스)\n" +
+    referenceBlock + "\n" +
     "아래 순서대로 각 번호에 맞는 목적의 글감을 하나씩 만든다:\n" + purposeBlock + "\n\n" +
     "대상이 저장하거나 공유할 만한 것만 만든다. 광고 문구, 과장, 근거 없는 수치는 쓰지 않는다.\n" +
     "hook은 첫 화면에 크게 들어갈 한 줄이라 18자를 넘기지 않는다.\n" +
@@ -2310,6 +2490,12 @@ async function runIgPost(post) {
       {
         name: post.title, hook: post.hook, tag: "오늘의 발견",
         bullets: post.bullets, price: "", commentKeyword: "정보",
+        // 계정마다 하나로 고정된 디자인. 이걸 안 넘기면 카드마다 색이 달라진다.
+        style: (db.getIgTarget(user.id) || {}).style,
+        /* 제휴 링크를 실제로 붙인 게시물에만 고지문구가 나간다. */
+        disclosure: post.monetization && post.monetization.type === "affiliate"
+          ? "이 포스팅은 제휴 마케팅 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
+          : "",
       },
       outDir
     );
@@ -2964,6 +3150,83 @@ app.post("/api/social/youtube/short", async (req, res) => {
    ══════════════════════════════════════════════════════════════ */
 const COST_BLOG = 30; // 블로그 글 1편 생성 시 차감 크레딧
 
+/* ══════════════════════════════════════════════════════════════
+   사업 진단 — 만들기 전에 팔릴 물건인지부터 본다
+
+   사업이 엎어지는 자리는 대체로 실행이 아니라 그 앞의 기획이다. 그런데 "좋아 보이는데요"
+   같은 말은 아무것도 바꾸지 못한다. 그래서 항목을 쪼개고 가중치를 고정해서, 낮게 나온
+   항목이 어디인지가 눈에 보이게 만든다.
+
+   가중치는 취향이 아니라 순서다 — 반복성이 가장 높은 건, 한 번 팔고 끝나는 사업은
+   매번 새 고객을 찾아야 해서 매출이 늘어도 사람이 먼저 갈려 나가기 때문이다.
+   ══════════════════════════════════════════════════════════════ */
+const COST_DIAGNOSIS = 20; // 총괄급 모델 한 번 호출. 카드뉴스보다 싸다.
+
+const BIZ_UPSIDE = [
+  { key: "demand",      weight: 3.0, label: "수요",   ask: "지금 당장 돈을 내고 살 사람이 있는가 (불편이 확실한가)" },
+  { key: "repeat",      weight: 4.5, label: "반복성", ask: "한 번 산 고객이 계속 사는가" },
+  { key: "scale",       weight: 3.5, label: "확장성", ask: "내 시간을 갈아넣지 않아도 수익이 늘어나는가" },
+  { key: "moat",        weight: 2.0, label: "해자",   ask: "남이 쉽게 못 따라오는 무기가 있는가" },
+];
+const BIZ_DOWNSIDE = [
+  { key: "capital",     weight: 2.5, label: "자본 부담", ask: "재고·초기 투자 위험이 큰가" },
+  { key: "salesEffort", weight: 3.0, label: "영업 강도", ask: "매번 설득해야만 팔리는가" },
+  { key: "competition", weight: 2.5, label: "경쟁 압력", ask: "이미 경쟁자가 아주 많은가" },
+];
+
+/** 0~10점 × 가중치. 분모가 0이 되지 않게 1을 깔아 둔다. */
+function bizIndex(scores) {
+  const sum = (list) => list.reduce((acc, f) => acc + f.weight * clamp10(scores[f.key]), 0);
+  const up = sum(BIZ_UPSIDE);
+  const down = sum(BIZ_DOWNSIDE);
+  return Math.round((up / (down + 1)) * 100) / 100;
+}
+function clamp10(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(10, n)) : 0;
+}
+
+/* 점수를 사람이 읽는 말로. 숫자만 주면 높은지 낮은지 알 수가 없다.
+
+   경계값은 실제 분포에서 잡았다. 모든 항목이 5점인 "그저 그런" 사업이 1.59로 나오므로,
+   1.5를 합격선으로 두면 평범한 사업이 전부 통과해 버려서 진단이 아무 말도 안 하게 된다.
+   위쪽도 마찬가지다 — 이론상 최대는 130이지만 상위(8점/3점)라야 4.16이라, 4.0을 최고 등급의
+   문턱으로 두면 거의 아무도 못 넘는다. */
+function bizGrade(score) {
+  if (score >= 3.5) return { label: "확장 가능", note: "구조가 받쳐 줍니다. 이제 실행 속도 싸움이에요." };
+  if (score >= 2.0) return { label: "괜찮은 사업", note: "될 만합니다. 약한 항목 하나만 손보면 확 달라져요." };
+  if (score >= 1.2) return { label: "고급 자영업", note: "돈은 벌리지만 사장님이 계속 붙어 있어야 하는 형태예요." };
+  return { label: "구조를 바꿔야 함", note: "지금 형태로 밀면 사장님이 먼저 지칩니다. 아래 개선안을 보세요." };
+}
+
+/* 점수 계산은 돈을 받고 파는 판단이라, 조용히 틀리면 안 된다.
+   node server.js --self-check 로 확인한다. */
+if (process.argv.includes("--self-check")) {
+  const assert = require("assert");
+  const all = (up, down) => ({
+    demand: up, repeat: up, scale: up, moat: up,
+    capital: down, salesEffort: down, competition: down,
+  });
+  // 전부 5점인 평범한 사업 → 1.59, "고급 자영업"
+  assert.strictEqual(bizIndex(all(5, 5)), 1.59);
+  assert.strictEqual(bizGrade(1.59).label, "고급 자영업");
+  // 그랜트 영상의 실제 사례(1.34)도 같은 칸에 들어가야 한다
+  assert.strictEqual(bizGrade(1.34).label, "고급 자영업");
+  // 상위 사업(8점 / 부담 3점) → 4.16, "확장 가능"
+  assert.strictEqual(bizIndex(all(8, 3)), 4.16);
+  assert.strictEqual(bizGrade(4.16).label, "확장 가능");
+  // 약한 사업(4점 / 부담 6점) → 1.06
+  assert.strictEqual(bizGrade(bizIndex(all(4, 6))).label, "구조를 바꿔야 함");
+  // 범위 밖 값과 쓰레기 값은 0으로 눌린다 — 모델이 100점을 주더라도 점수가 폭발하면 안 된다
+  assert.strictEqual(clamp10(999), 10);
+  assert.strictEqual(clamp10("없음"), 0);
+  assert.strictEqual(clamp10(undefined), 0);
+  // 분모가 0이어도 나눗셈이 깨지지 않아야 한다
+  assert.ok(Number.isFinite(bizIndex(all(10, 0))));
+  console.log("사업 진단 채점 self-check 통과");
+  process.exit(0);
+}
+
 /** 사설/내부 대역 여부. IPv4·IPv6 모두 본다. */
 function isPrivateAddress(host) {
   const h = String(host || "").toLowerCase().replace(/^\[|\]$/g, "");
@@ -3053,6 +3316,68 @@ app.get("/api/social/wordpress/status", (req, res) => {
     lastError: site?.lastError || null,
     cost: COST_BLOG,
   });
+});
+
+/* 사업 한 줄을 받아 점수를 매긴다. 점수 자체보다, 어느 항목이 낮아서 그 점수가 나왔는지가 쓸모다. */
+app.post("/api/business/diagnose", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) return res.status(402).json({ error: "이용 기간이 지났습니다. 다시 결제해 주세요." });
+
+  const idea = String((req.body && req.body.idea) || "").trim().slice(0, 600);
+  if (idea.length < 10) {
+    return res.status(400).json({ error: "무엇을 누구에게 파는지 한두 문장으로 적어 주세요." });
+  }
+  if ((u.credits || 0) < COST_DIAGNOSIS) {
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다." });
+  }
+
+  const askBlock = (list) => list.map((f) => "  " + f.key + " — " + f.label + ": " + f.ask).join("\n");
+  const prompt =
+    "너는 사업 구조를 뜯어보는 전략 담당이다. 아래 사업을 항목별로 0~10점으로 채점한다.\n\n" +
+    "사업: " + idea + "\n\n" +
+    "[높을수록 좋은 항목]\n" + askBlock(BIZ_UPSIDE) + "\n" +
+    "[낮을수록 좋은 항목 — 부담이 클수록 높은 점수]\n" + askBlock(BIZ_DOWNSIDE) + "\n\n" +
+    "채점 규칙:\n" +
+    "- 후하게 주지 않는다. 근거가 없으면 5점 아래로 준다.\n" +
+    "- reason은 왜 그 점수인지 한 문장. 일반론 말고 이 사업에 대해서만 쓴다.\n" +
+    "- weakest는 가장 먼저 손봐야 할 항목의 key 하나.\n" +
+    "- fixes는 구체적인 개선안 3개. '마케팅을 잘하세요' 같은 말은 쓰지 않는다.\n" +
+    "  무엇을 바꾸면 어느 항목 점수가 오르는지가 보이게 쓴다.\n\n" +
+    "설명 없이 JSON만 출력한다:\n" +
+    '{"scores":{"demand":0,"repeat":0,"scale":0,"moat":0,"capital":0,"salesEffort":0,"competition":0},' +
+    '"reasons":{"demand":"","repeat":"","scale":"","moat":"","capital":"","salesEffort":"","competition":""},' +
+    '"weakest":"","fixes":["","",""]}';
+
+  try {
+    const raw = await callWithFallback(loadModelConfig(), "전문_전략기획", prompt, false, 1400,
+      { userId: u.id, kind: "biz_diagnose" });
+    const parsed = parseJSON(raw);
+    if (!parsed || !parsed.scores) return res.status(502).json({ error: "진단에 실패했어요. 잠시 뒤 다시 시도해 주세요." });
+
+    /* 점수 계산은 서버가 한다. 모델에게 총점을 맡기면 항목 점수와 총점이 안 맞는 답이 나온다. */
+    const score = bizIndex(parsed.scores);
+    const grade = bizGrade(score);
+    const fields = BIZ_UPSIDE.concat(BIZ_DOWNSIDE).map((f) => ({
+      key: f.key, label: f.label, weight: f.weight,
+      side: BIZ_UPSIDE.includes(f) ? "up" : "down",
+      score: clamp10(parsed.scores[f.key]),
+      reason: String((parsed.reasons && parsed.reasons[f.key]) || "").slice(0, 200),
+    }));
+
+    const credits = Math.max(0, (u.credits || 0) - COST_DIAGNOSIS);
+    db.updateCredits(u.id, credits, u.ceiling);
+    db.addUsage(u.id, { at: nowKR(), amount: COST_DIAGNOSIS, kind: "사업 진단", label: idea.slice(0, 40) });
+
+    res.json({
+      ok: true, score, grade, fields,
+      weakest: String(parsed.weakest || ""),
+      fixes: (Array.isArray(parsed.fixes) ? parsed.fixes : []).slice(0, 3).map((x) => String(x).slice(0, 300)),
+      credits,
+    });
+  } catch (e) {
+    res.status(500).json({ error: "진단 실패: " + e.message });
+  }
 });
 
 app.post("/api/social/wordpress/connect", async (req, res) => {

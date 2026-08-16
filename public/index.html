@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script src="https://js.tosspayments.com/v2/standard"></script>
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script src="/bibi.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -645,6 +646,41 @@
     color:var(--ink); cursor:pointer; }
   .hour-pick button:hover{ border-color:var(--purple); color:var(--purple); }
 
+  /* ══════ 사업 진단 ══════ */
+  .biz-result{ margin-top:16px; border-top:1px solid var(--line); padding-top:16px; }
+  .biz-top{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px; }
+  .biz-score{ font-family:var(--f-data); font-variant-numeric:tabular-nums;
+    font-size:38px; font-weight:700; color:var(--purple); line-height:1; }
+  .biz-grade{ font-size:15px; font-weight:700; color:var(--ink); }
+  .biz-note{ font-size:13px; color:var(--soft); margin-bottom:14px; }
+  .biz-rows{ display:flex; flex-direction:column; gap:9px; }
+  .biz-row{ display:grid; grid-template-columns:78px 1fr 34px; align-items:center; gap:10px; }
+  .biz-row .n{ font-size:13px; font-weight:600; color:var(--ink); }
+  .biz-row .n small{ display:block; font-weight:400; color:var(--soft); font-size:11px; }
+  .biz-bar{ height:8px; background:var(--wash); border-radius:999px; overflow:hidden; }
+  .biz-bar i{ display:block; height:100%; border-radius:999px; background:var(--purple); }
+  .biz-row.down .biz-bar i{ background:#e0655b; }
+  .biz-row .v{ font-family:var(--f-data); font-variant-numeric:tabular-nums;
+    font-size:13px; text-align:right; color:var(--soft); }
+  .biz-row.weak .n{ color:var(--purple); }
+  .biz-why{ grid-column:1 / -1; font-size:11.5px; color:var(--soft); margin:-3px 0 3px 88px; }
+  .biz-fixes{ margin-top:16px; background:var(--wash); border-radius:var(--r-2); padding:14px 16px; }
+  .biz-fixes b{ font-size:13px; display:block; margin-bottom:8px; }
+  .biz-fixes li{ font-size:13px; line-height:1.65; margin-left:16px; }
+  @media(max-width:520px){
+    .biz-row{ grid-template-columns:66px 1fr 30px; }
+    .biz-why{ margin-left:0; }
+  }
+
+  /* 카드 디자인 고르기 — 색 동그라미가 곧 미리보기다 */
+  .style-pick{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .style-pick button{ display:flex; align-items:center; gap:7px; font-size:13px; font-weight:600;
+    padding:7px 13px; border:1px solid var(--line); background:#fff; border-radius:999px;
+    color:var(--ink); cursor:pointer; }
+  .style-pick button i{ width:14px; height:14px; border-radius:50%; display:block; }
+  .style-pick button:hover{ border-color:var(--purple); }
+  .style-pick button.on{ border-color:var(--ink); background:var(--ink); color:#fff; }
+
   /* ══════ SCREEN 9 — 관리자 ══════ */
   #screen9 .main-content{ background:var(--bg); }
   .ad-tabs{ display:flex; gap:6px; margin-bottom:18px; flex-wrap:wrap; }
@@ -694,6 +730,23 @@
     padding:12px 14px; font-size:12.5px; line-height:1.7; margin-top:14px; }
   .guide-warn b{ font-weight:700; }
   .guide-warn ol{ margin:8px 0 0 18px; } .guide-warn li{ margin-bottom:4px; }
+
+  /* 산출물·요금 (랜딩 하단) — 어두운 히어로 위에 얹히므로 흰 글자 기준 */
+  .landing-facts{ position:relative; z-index:10; max-width:940px; margin:0 auto;
+    padding:26px 24px 6px; display:grid; grid-template-columns:1fr 1fr; gap:22px;
+    border-top:1px solid rgba(255,255,255,.13); }
+  .landing-facts b{ display:block; font-size:12px; letter-spacing:.06em; text-transform:uppercase;
+    color:rgba(255,255,255,.5); margin-bottom:11px; }
+  .landing-facts ul{ list-style:none; }
+  .landing-facts li{ font-size:13.5px; line-height:1.9; color:rgba(255,255,255,.82); }
+  .landing-facts li::before{ content:'—'; color:rgba(255,255,255,.35); margin-right:8px; }
+  .lf-rows div{ display:flex; justify-content:space-between; align-items:baseline; gap:12px;
+    font-size:13.5px; line-height:2; color:rgba(255,255,255,.82); }
+  .lf-rows em{ font-family:var(--f-data); font-variant-numeric:tabular-nums;
+    font-style:normal; font-weight:600; color:#fff; }
+  .landing-facts small{ display:block; margin-top:10px; font-size:11.5px;
+    color:rgba(255,255,255,.45); line-height:1.6; }
+  @media(max-width:720px){ .landing-facts{ grid-template-columns:1fr; gap:20px; padding-top:22px; } }
 
   /* 법적 문서 링크(랜딩 하단) */
   .landing-legal{ position:relative; z-index:10; text-align:center; padding:14px 0 22px; }
@@ -758,6 +811,28 @@
       <div class="org-foot"><span>교대 없음 · 연중무휴</span><span class="org-clock" id="orgClock">--:--</span></div>
     </div>
   </div>
+  <!-- 무엇이 나오고 얼마인지. 이게 없으면 "좋아 보이는데 얼만데?"에서 이탈한다.
+       아직 고객 실적이 없으므로 성과 숫자는 쓰지 않는다 — 지어내면 그건 그냥 거짓말이다. -->
+  <div class="landing-facts">
+    <div class="lf-out">
+      <b>실제로 나오는 것</b>
+      <ul>
+        <li>인스타 카드뉴스 · 릴스 — 계정에 자동 발행까지</li>
+        <li>블로그 글 · 상세페이지 문구</li>
+        <li>사업 진단 — 항목별 점수와 먼저 고칠 것</li>
+      </ul>
+    </div>
+    <div class="lf-price">
+      <b>요금</b>
+      <div class="lf-rows">
+        <div><span>가입하면</span><em>300 크레딧 무료</em></div>
+        <div><span>스탠다드</span><em>월 19,900원 · 600</em></div>
+        <div><span>프로</span><em>월 29,900원 · 1,000</em></div>
+      </div>
+      <small>카드뉴스 1건 30 · 사업 진단 20 · 결과가 나올 때만 차감됩니다.</small>
+    </div>
+  </div>
+
   <div class="landing-legal">
     <a href="/terms.html" target="_blank" rel="noopener">이용약관</a>
     <a href="/privacy.html" target="_blank" rel="noopener">개인정보처리방침</a>
@@ -837,6 +912,18 @@
         </div>
       </div>
       <div class="brain-card-right"><div class="brain-img-slot">🧠</div></div>
+    </div>
+
+    <div class="section-header"><div class="section-title">사업 진단</div></div>
+    <div class="kbox">
+      <label for="bizIdea">무엇을 누구에게 파나요?</label>
+      <textarea id="bizIdea" style="min-height:70px;"
+        placeholder="예) 학원 원장님들께 학생 관리 시스템을 만들어 드리고 월 구독료를 받을 생각이에요."></textarea>
+      <div class="row" style="align-items:center;gap:10px;">
+        <button class="btn-sm pri" id="bizBtn">점수 매기기</button>
+        <span style="font-size:12px;color:var(--soft);">전략기획 비비가 항목별로 채점합니다 · 20 크레딧</span>
+      </div>
+      <div class="biz-result" id="bizResult" style="display:none;"></div>
     </div>
 
     <div class="section-header"><div class="section-title">지식 등록</div></div>
@@ -1170,6 +1257,11 @@
           <div class="ig-hint">릴스는 카드뉴스 슬라이드를 세로 영상으로 엮어 만듭니다.
             영상 API를 쓰지 않아 추가 비용이 거의 없어요.</div>
 
+          <label>카드 디자인</label>
+          <div class="style-pick" id="igStyles"></div>
+          <div class="ig-hint">한 번 고르면 앞으로 만드는 카드가 전부 이 디자인으로 나옵니다.
+            매번 다르게 나오면 피드가 남의 계정처럼 보여서, 디자인은 고정하고 내용만 바꿉니다.</div>
+
           <label style="display:flex;align-items:center;gap:8px;margin-top:15px;font-weight:600;">
             <input type="checkbox" id="igEnabled" style="width:auto;"> 자동 발행 켜기
           </label>
@@ -1419,7 +1511,7 @@
     <div id="subStatusWrap" style="display:none;margin-bottom:14px;padding:12px 14px;border-radius:var(--r-2);background:var(--bg);border:1px solid var(--line);font-size:13px;color:#374151;"></div>
 
     <div id="subPlans"></div>
-    <div id="subSoonWrap" class="topup-soon" style="display:none;margin:10px 0;">🔁 카드 자동결제(정기구독)는 준비 중입니다 — 사업자등록과 정기결제 심사가 끝나면 바로 켜집니다. 지금은 아래 무통장입금으로 신청하실 수 있어요.</div>
+    <div id="subSoonWrap" class="topup-soon" style="display:none;margin:10px 0;">🔁 카드 자동결제는 아직 준비 중입니다. 지금은 아래 무통장입금으로 신청하실 수 있어요.</div>
 
     <div id="bankWrap" style="display:none;margin-top:14px;padding:14px;border-radius:var(--r-2);background:var(--bg);border:1px solid var(--line);">
       <b style="font-size:13.5px;">🏦 무통장입금으로 신청</b>
@@ -1840,6 +1932,23 @@ var OAUTH_MARK = {
 })();
 
 /* 소셜 로그인은 페이지를 떠났다 돌아오므로, 결과를 주소창에 실어 보낸다. */
+(function showPaddleResult(){
+  var q = new URLSearchParams(location.search);
+  if(q.get('subscription') !== 'paddle_done') return;
+  history.replaceState(null, '', location.pathname);
+  celebrate('결제가 접수됐어요 — 크레딧을 반영하는 중입니다');
+  /* 웹훅 도착까지 보통 몇 초다. 세 번에 걸쳐 다시 확인한다. */
+  var tries = 0;
+  var timer = setInterval(function(){
+    tries++;
+    fetch('/api/me').then(function(r){ return r.ok ? r.json() : null; }).then(function(d){
+      if(d && d.user){ renderCredits(d.user); }
+      if(d && d.user && d.user.credits > 0){ clearInterval(timer); celebrate('크레딧이 들어왔어요'); }
+    }).catch(function(){});
+    if(tries >= 6) clearInterval(timer);
+  }, 5000);
+})();
+
 (function showOauthResult(){
   var q = new URLSearchParams(location.search);
   var err = q.get('auth_error');
@@ -2141,6 +2250,22 @@ function renderIgCost(){
   el.textContent = n ? ('주 ' + n + '개 = 카드뉴스 ' + cards + ' + 릴스 ' + reels + ' · 약 ' + total + ' 크레딧') : '';
 }
 
+/* 고른 디자인은 화면에만 두지 않고 igState에 남긴다 — 저장할 때 여기서 읽어 간다. */
+function renderIgStyles(picked){
+  var box = document.getElementById('igStyles');
+  var list = igState.styles || [{ key:'minimal', label:'미니멀', color:'#5b4bf5' }];
+  igState.style = picked;
+  box.innerHTML = '';
+  list.forEach(function(s){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = s.key === picked ? 'on' : '';
+    b.innerHTML = '<i style="background:' + s.color + '"></i>' + esc(s.label);
+    b.onclick = function(){ renderIgStyles(s.key); };
+    box.appendChild(b);
+  });
+}
+
 function renderIgTarget(t){
   document.getElementById('igTopic').value = t.topic || '';
   document.getElementById('igAudience').value = t.audience || '';
@@ -2151,6 +2276,7 @@ function renderIgTarget(t){
   document.getElementById('igRatio').value = t.reelRatio == null ? 40 : t.reelRatio;
   document.getElementById('igRatioTxt').textContent = '릴스 ' + document.getElementById('igRatio').value + '%';
   document.getElementById('igEnabled').checked = !!t.enabled;
+  renderIgStyles(t.style || 'minimal');
   renderIgCost();
 
   /* 연결이 안 돼 있으면 무엇이 필요한지 정확히 적는다. 인스타는 개인 계정으로는
@@ -2210,7 +2336,7 @@ function renderIgPosts(posts){
 
 function applyIg(d){
   igState = { connected:!!d.connected, target:d.target, posts:d.posts||[],
-              growth:d.growth||[], cost:d.cost||igState.cost };
+              growth:d.growth||[], cost:d.cost||igState.cost, styles:d.styles||igState.styles };
   renderIgConn(igState.connected);
   renderIgTarget(d.target || {});
   renderIgGrowth(igState.growth);
@@ -2235,7 +2361,8 @@ document.getElementById('igSaveBtn').onclick = function(){
     postsPerWeek: document.getElementById('igPerWeek').value,
     reelRatio: document.getElementById('igRatio').value,
     hour: document.getElementById('igHour').value,
-    enabled: document.getElementById('igEnabled').checked
+    enabled: document.getElementById('igEnabled').checked,
+    style: igState.style || 'minimal'
   }).then(function(){ celebrate('타깃을 저장했어요'); loadInstagram(); })
     .catch(function(e){ alert(e.message); })
     .then(function(){ btn.disabled = false; });
@@ -2995,6 +3122,52 @@ document.getElementById('kAddBtn').onclick = function(){
     document.getElementById('kTitle').value=''; document.getElementById('kText').value='';
     renderKnowledgeList(d.items||[]);
   });
+};
+
+/* ══════ 사업 진단 ══════
+   점수 하나만 보여주면 "그래서 뭘 하라고?"로 끝난다. 어느 항목이 낮아서 그 점수가 나왔는지와
+   무엇부터 손대야 하는지를 같이 띄운다. */
+function renderBizResult(d){
+  var box = document.getElementById('bizResult');
+  var rows = (d.fields || []).map(function(f){
+    var pct = Math.round(f.score * 10);
+    var weak = f.key === d.weakest ? ' weak' : '';
+    return '<div class="biz-row ' + (f.side === 'down' ? 'down' : 'up') + weak + '">'
+      + '<div class="n">' + esc(f.label) + '<small>×' + f.weight + '</small></div>'
+      + '<div class="biz-bar"><i style="width:' + pct + '%"></i></div>'
+      + '<div class="v">' + f.score + '</div>'
+      + (f.reason ? '<div class="biz-why">' + esc(f.reason) + '</div>' : '')
+      + '</div>';
+  }).join('');
+
+  var fixes = (d.fixes || []).length
+    ? '<div class="biz-fixes"><b>먼저 손볼 것</b><ol>'
+      + d.fixes.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('')
+      + '</ol></div>'
+    : '';
+
+  box.innerHTML =
+    '<div class="biz-top"><span class="biz-score">' + d.score + '</span>'
+    + '<span class="biz-grade">' + esc(d.grade.label) + '</span></div>'
+    + '<div class="biz-note">' + esc(d.grade.note) + '</div>'
+    + '<div class="biz-rows">' + rows + '</div>'
+    + fixes;
+  box.style.display = 'block';
+}
+
+document.getElementById('bizBtn').onclick = function(){
+  var btn = this;
+  var idea = document.getElementById('bizIdea').value.trim();
+  if(idea.length < 10){ document.getElementById('bizIdea').focus(); return; }
+  btn.disabled = true; btn.textContent = '채점 중…';
+  igApi('/api/business/diagnose', { idea: idea })
+    .then(function(d){
+      renderBizResult(d);
+      // 크레딧이 줄었으니 화면 숫자도 같이 내린다 — 안 그러면 새로고침 전까지 옛 값이 남는다.
+      if(d.credits != null && me){ me.credits = d.credits; renderCredits(me); }
+    })
+    .catch(function(e){ alert(e.message); })
+    .then(function(){ btn.disabled = false; btn.textContent = '점수 매기기'; });
 };
 
 /* ══════ 카드뉴스 자동생성 ══════ */
@@ -3784,9 +3957,11 @@ function fmtDate(iso){
   return (d.getMonth()+1)+'월 '+d.getDate()+'일';
 }
 function loadSubscriptionConfig(){
-  fetch('/api/subscription/config').then(function(r){ return r.json(); }).then(function(cfg){
+  /* Paddle 설정을 먼저 읽어야 "준비 중" 안내를 띄울지 정할 수 있다 */
+  loadPaddleConfig().then(function(){ return fetch('/api/subscription/config'); }).then(function(r){ return r.json(); }).then(function(cfg){
     subConfig = cfg;
-    document.getElementById('subSoonWrap').style.display = cfg.enabled ? 'none' : 'block';
+    document.getElementById('subSoonWrap').style.display =
+      (cfg.enabled || paddleConfig.enabled) ? 'none' : 'block';
     return fetch('/api/subscription/status').then(function(r){ return r.json(); });
   }).then(function(status){
     subStatus = status;
@@ -3833,8 +4008,62 @@ function renderSubscription(){
     box.appendChild(card);
   });
 }
+/* ══════ Paddle 결제 ══════
+   국내 PG는 사업자등록이 있어야 계약이 되는데, Paddle은 자기가 판매자가 되는 구조라
+   그게 없어도 카드 결제를 받을 수 있다. 대신 수수료가 더 비싸다.
+
+   결제 성공 판정은 여기서 하지 않는다. 결제창이 성공을 띄워도 그건 화면일 뿐이고,
+   크레딧은 Paddle이 서버로 보내는 웹훅을 확인한 뒤에만 들어간다. */
+var paddleConfig = { enabled: false };
+var paddleReadyPromise = null;
+
+function loadPaddleConfig(){
+  return fetch('/api/paddle/config').then(function(r){ return r.json(); })
+    .then(function(cfg){ paddleConfig = cfg || { enabled: false }; return cfg; })
+    .catch(function(){ paddleConfig = { enabled: false }; return paddleConfig; });
+}
+
+/* Paddle.js는 한 번만 초기화한다. 두 번 부르면 결제창이 안 열린다. */
+function ensurePaddle(){
+  if(paddleReadyPromise) return paddleReadyPromise;
+  paddleReadyPromise = new Promise(function(resolve, reject){
+    if(typeof Paddle === 'undefined'){ reject(new Error('결제 모듈을 불러오지 못했습니다.')); return; }
+    try {
+      if(paddleConfig.environment === 'sandbox' && Paddle.Environment && Paddle.Environment.set){
+        Paddle.Environment.set('sandbox');
+      }
+      Paddle.Initialize({ token: paddleConfig.clientToken });
+      resolve(Paddle);
+    } catch(e){ reject(e); }
+  });
+  return paddleReadyPromise;
+}
+
+function startPaddleCheckout(planKey){
+  igApi('/api/paddle/checkout', { plan: planKey }).then(function(d){
+    return ensurePaddle().then(function(P){
+      P.Checkout.open({
+        items: [{ priceId: d.priceId, quantity: 1 }],
+        customer: d.customer && d.customer.email ? { email: d.customer.email } : undefined,
+        customData: d.customData,
+        settings: {
+          locale: 'ko',
+          displayMode: 'overlay',
+          theme: 'light',
+          /* 결제가 끝나면 이 주소로 보낸다. 여기서 크레딧을 주는 게 아니라,
+             "웹훅이 도착할 때까지 잠깐 기다린다"는 안내를 띄우기 위한 것이다. */
+          successUrl: location.origin + '/?subscription=paddle_done',
+        },
+      });
+    });
+  }).catch(function(e){ alert(e.message || '결제창을 열지 못했습니다.'); });
+}
+
 function startSubscription(planKey){
-  if(!subConfig.enabled){ alert('카드 자동구독은 아직 준비 중입니다. 무통장입금으로 신청해 주세요.'); return; }
+  /* 둘 다 카드 결제지만 뒤가 다르다. Paddle이 설정돼 있으면 그쪽을 쓴다 —
+     사업자등록 없이 되는 유일한 길이라 우선한다. */
+  if(paddleConfig.enabled){ startPaddleCheckout(planKey); return; }
+  if(!subConfig.enabled){ alert('카드 결제는 아직 준비 중입니다. 무통장입금으로 신청해 주세요.'); return; }
   var tossPayments = TossPayments(subConfig.clientKey);
   var payment = tossPayments.payment({ customerKey: (me&&me.email) || 'guest' });
   payment.requestBillingAuth({

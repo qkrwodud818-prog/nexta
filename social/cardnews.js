@@ -17,6 +17,35 @@ function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// ── 스타일 프리셋 ────────────────────────────────────────────
+// 매번 색을 새로 고르게 두면 같은 계정인데 카드마다 딴 사람이 만든 것처럼 보인다.
+// 계정당 하나를 골라 고정하고, 그다음부터는 내용만 갈아끼운다.
+// 값이 코드에 박혀 있어야 하는 이유: 사용자가 색을 자유롭게 넣으면 결국 안 어울리는 조합이
+// 나오고, 피드 전체가 무너진다. 고를 수 있는 건 "어느 프리셋이냐"까지다.
+const STYLES = {
+  minimal: {
+    label: "미니멀",
+    color1: "#5b4bf5", color2: "#8b7cff",
+    infoBg: "#f5f6fa", infoInk: "#1a1a2e", bodyInk: "#323240",
+  },
+  dark: {
+    label: "딥다크",
+    color1: "#c0392b", color2: "#2c2c34",
+    infoBg: "#1a1a1f", infoInk: "#ffffff", bodyInk: "#d8d8e0",
+  },
+  editorial: {
+    label: "에디토리얼",
+    color1: "#1f6f5c", color2: "#3fa88c",
+    infoBg: "#faf7f0", infoInk: "#22221f", bodyInk: "#4a4a44",
+  },
+};
+const DEFAULT_STYLE = "minimal";
+
+/** 프리셋 이름을 실제 색값으로. 모르는 이름이면 기본값 — 화면이 깨지느니 기본이 낫다. */
+function resolveStyle(name) {
+  return STYLES[String(name || "")] || STYLES[DEFAULT_STYLE];
+}
+
 // color1/color2는 요청 본문에서 그대로 들어오는 값이라, 검증 없이 SVG 속성에 넣으면
 // 따옴표를 깨고 임의의 SVG 태그를 주입할 수 있다(XML 인젝션). #rgb/#rrggbb 형식만 허용한다.
 function safeHexColor(v, fallback) {
@@ -100,34 +129,38 @@ async function renderHookSlide({ hook, tag, photoBuffer, color1, color2 }, outPa
 }
 
 // ── 슬라이드 2: 상품 정보 (특징 불릿 + 가격) ──
-async function renderInfoSlide({ title, bullets, price, color1 }, outPath) {
+async function renderInfoSlide({ title, bullets, price, color1, style }, outPath) {
   const bulletSvg = bullets
     .map((b, i) => {
       const y = 380 + i * 110;
       return `<circle cx="115" cy="${y - 12}" r="14" fill="${color1}"/>
-              <text x="160" y="${y}" font-size="40" font-weight="700" fill="#323240">${esc(b)}</text>`;
+              <text x="160" y="${y}" font-size="40" font-weight="700" fill="${style.bodyInk}">${esc(b)}</text>`;
     })
     .join("\n");
 
+  // 가격이 없는 계정이 훨씬 많다(제휴·정보 계정). 빈 막대를 그리면 그냥 색깔 덩어리가 남는다.
+  const priceBar = price
+    ? `<rect x="100" y="${H - 260}" width="${W - 200}" height="120" rx="24" fill="${color1}"/>
+       <text x="${W / 2}" y="${H - 185}" font-size="52" font-weight="900" fill="#fff" text-anchor="middle">${esc(price)}</text>`
+    : "";
+
   const svg = `
   <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-    <rect width="${W}" height="${H}" fill="#f5f6fa"/>
+    <rect width="${W}" height="${H}" fill="${style.infoBg}"/>
     <rect width="${W}" height="16" fill="${color1}"/>
     <g font-family="${FONT}">
-      <text x="${W / 2}" y="150" font-size="56" font-weight="900" fill="#1a1a2e" text-anchor="middle">
+      <text x="${W / 2}" y="150" font-size="56" font-weight="900" fill="${style.infoInk}" text-anchor="middle">
         ${multilineTspans(title, W / 2, 150, 70, 14)}
       </text>
       ${bulletSvg}
-      <rect x="100" y="${H - 260}" width="${W - 200}" height="120" rx="24" fill="${color1}"/>
-      <text x="${W / 2}" y="${H - 185}" font-size="52" font-weight="900" fill="#fff" text-anchor="middle">${esc(price)}</text>
+      ${priceBar}
     </g>
   </svg>`;
   await sharp(Buffer.from(svg)).png().toFile(outPath);
 }
 
 // ── 슬라이드 3: CTA (댓글 유도 + 쿠팡파트너스 고지문구) ──
-async function renderCtaSlide({ ctaText, commentKeyword, color1, color2 }, outPath) {
-  const disclosure = "이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.";
+async function renderCtaSlide({ ctaText, commentKeyword, color1, color2, disclosure }, outPath) {
   const badge = `댓글에 '${commentKeyword}' 남기면 DM으로 링크 드려요`;
   const svg = `
   <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
@@ -144,9 +177,9 @@ async function renderCtaSlide({ ctaText, commentKeyword, color1, color2 }, outPa
       </text>
       <rect x="${W / 2 - 420}" y="780" width="840" height="90" rx="45" fill="#fff"/>
       <text x="${W / 2}" y="836" font-size="32" font-weight="700" fill="${color1}" text-anchor="middle">${esc(badge)}</text>
-      <text x="${W / 2}" y="${H - 150}" font-size="24" fill="#ffffffcc" text-anchor="middle">
+      ${disclosure ? `<text x="${W / 2}" y="${H - 150}" font-size="24" fill="#ffffffcc" text-anchor="middle">
         ${multilineTspans(disclosure, W / 2, H - 150, 34, 34)}
-      </text>
+      </text>` : ""}
       <text x="${W / 2}" y="${H - 30}" font-size="20" fill="#ffffff99" text-anchor="middle">Made with 넥스타 · ${esc(SITE_URL)}</text>
     </g>
   </svg>`;
@@ -173,8 +206,11 @@ async function generateCardNews(product, outDir) {
     } catch (e) { /* 사진을 못 가져와도 카드뉴스 자체는 계속 만든다 */ }
   }
 
-  const color1 = safeHexColor(product.color1, "#ff7a59");
-  const color2 = safeHexColor(product.color2, "#ff578c");
+  /* 색은 프리셋에서 온다. 직접 넘긴 color1/color2는 프리셋을 덮어쓰는 예외 경로로만 남긴다
+     — 상품 카드뉴스처럼 브랜드 색이 정해진 경우가 있어서다. */
+  const style = resolveStyle(product.style);
+  const color1 = safeHexColor(product.color1, style.color1);
+  const color2 = safeHexColor(product.color2, style.color2);
 
   const p1 = path.join(outDir, "slide1.png");
   const p2 = path.join(outDir, "slide2.png");
@@ -185,15 +221,22 @@ async function generateCardNews(product, outDir) {
     p1
   );
   await renderInfoSlide(
-    { title: product.name, bullets: product.bullets, price: product.price, color1 },
+    { title: product.name, bullets: product.bullets, price: product.price, color1, style },
     p2
   );
   await renderCtaSlide(
-    { ctaText: product.cta || `이거 하나면\n고민 끝`, commentKeyword: product.commentKeyword || "정보", color1, color2 },
+    {
+      ctaText: product.cta || `이거 하나면\n고민 끝`,
+      commentKeyword: product.commentKeyword || "정보",
+      color1, color2,
+      /* 고지문구는 실제로 제휴 수수료를 받을 때만 찍는다. 안 받는데 찍으면 거짓말이고,
+         받는데 안 찍으면 표시광고법 위반이다. 둘 다 호출부가 알려줘야 정해진다. */
+      disclosure: product.disclosure || "",
+    },
     p3
   );
 
   return [p1, p2, p3];
 }
 
-module.exports = { generateCardNews };
+module.exports = { generateCardNews, STYLES, DEFAULT_STYLE };

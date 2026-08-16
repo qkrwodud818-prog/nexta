@@ -414,6 +414,12 @@ if (!igPostColumns.includes("utm_campaign")) {
   db.exec("ALTER TABLE ig_posts ADD COLUMN utm_campaign TEXT");
 }
 
+/* 카드 디자인은 계정당 하나로 고정한다. 매번 다르게 나오면 피드가 남의 것처럼 보인다. */
+const igTargetColumns = db.prepare("PRAGMA table_info(ig_targets)").all().map((c) => c.name);
+if (!igTargetColumns.includes("style")) {
+  db.exec("ALTER TABLE ig_targets ADD COLUMN style TEXT NOT NULL DEFAULT 'minimal'");
+}
+
 
 /* ────────────────────────── 스마트스토어 연동 ──────────────────────────
  * 네이버 커머스API는 client_id + client_secret으로 매 요청마다 서명을 만들어 토큰을 받는다.
@@ -1388,6 +1394,7 @@ function hydrateTarget(r) {
   return {
     topic: r.topic, audience: r.audience, tone: r.tone, hashtags: r.hashtags || "",
     postsPerWeek: r.posts_per_week, reelRatio: r.reel_ratio, hour: r.hour, enabled: !!r.enabled,
+    style: r.style || "minimal",
   };
 }
 function getIgTarget(userId) {
@@ -1396,16 +1403,17 @@ function getIgTarget(userId) {
 function upsertIgTarget(userId, t) {
   const now = new Date().toISOString();
   db.prepare(
-    "INSERT INTO ig_targets (user_id, topic, audience, tone, hashtags, posts_per_week, reel_ratio, hour, enabled, created_at, updated_at)" +
-    " VALUES (@userId, @topic, @audience, @tone, @hashtags, @postsPerWeek, @reelRatio, @hour, @enabled, @now, @now)" +
+    "INSERT INTO ig_targets (user_id, topic, audience, tone, hashtags, posts_per_week, reel_ratio, hour, enabled, style, created_at, updated_at)" +
+    " VALUES (@userId, @topic, @audience, @tone, @hashtags, @postsPerWeek, @reelRatio, @hour, @enabled, @style, @now, @now)" +
     " ON CONFLICT(user_id) DO UPDATE SET" +
     "   topic = excluded.topic, audience = excluded.audience, tone = excluded.tone," +
     "   hashtags = excluded.hashtags, posts_per_week = excluded.posts_per_week," +
     "   reel_ratio = excluded.reel_ratio, hour = excluded.hour, enabled = excluded.enabled," +
-    "   updated_at = excluded.updated_at"
+    "   style = excluded.style, updated_at = excluded.updated_at"
   ).run({
     userId, topic: t.topic, audience: t.audience, tone: t.tone || "친근함", hashtags: t.hashtags || "",
-    postsPerWeek: t.postsPerWeek, reelRatio: t.reelRatio, hour: t.hour, enabled: t.enabled ? 1 : 0, now,
+    postsPerWeek: t.postsPerWeek, reelRatio: t.reelRatio, hour: t.hour, enabled: t.enabled ? 1 : 0,
+    style: t.style || "minimal", now,
   });
 }
 
@@ -1599,6 +1607,29 @@ function getPerfByPurpose(userId, sinceDate) {
   ).all(userId, sinceDate);
 }
 
+/* 내 계정 평균보다 훨씬 잘 나온 게시물만 골라낸다.
+   "잘 나왔다"의 기준을 절대 조회수로 잡으면 계정이 클수록 전부 걸리고 작으면 아무것도 안 걸린다.
+   그래서 남의 계정이 아니라 내 계정 평균 대비 몇 배인지로 본다.
+   표본이 적을 때 한 건이 평균을 끌어올려 자기 자신만 통과하는 걸 막으려고 최소 게시물 수를 둔다. */
+function getBreakoutPosts(userId, sinceDate, minMultiple, limit) {
+  const rows = db.prepare(
+    "SELECT p.id, p.title, p.hook, p.kind, p.purpose, COALESCE(SUM(s.views),0) AS views" +
+    " FROM ig_posts p LEFT JOIN perf_snapshots s ON s.content_id = p.id" +
+    " WHERE p.user_id = ? AND p.created_at >= ? AND p.status = 'done'" +
+    " GROUP BY p.id HAVING views > 0"
+  ).all(userId, sinceDate);
+
+  if (rows.length < 4) return [];
+  const avg = rows.reduce((sum, r) => sum + r.views, 0) / rows.length;
+  if (avg <= 0) return [];
+
+  return rows
+    .filter((r) => r.views >= avg * minMultiple)
+    .sort((a, b) => b.views - a.views)
+    .slice(0, limit || 3)
+    .map((r) => ({ ...r, multiple: Math.round((r.views / avg) * 10) / 10 }));
+}
+
 function hydrateLead(r) {
   return {
     id: r.id, source: r.source, handle: r.handle || "", message: r.message,
@@ -1657,7 +1688,7 @@ module.exports = {
   getRevenueKey, setRevenueKey, deleteRevenueKey, markRevenueSync, listRevenueKeyUsers,
   setIgPostLink,
   addPersona, getActivePersona, getPersonaById, listPersonas, activatePersona,
-  recordPerf, getPerfByPurpose, getPerfByHour,
+  recordPerf, getPerfByPurpose, getPerfByHour, getBreakoutPosts,
   addLead, listLeads, setLeadDraft, setLeadStatus,
   getIgTarget, upsertIgTarget, addIgPosts, listIgPosts, deleteIgPost,
   getDueIgPosts, markIgPost, claimIgPost, recordIgGrowth, listIgGrowth,
