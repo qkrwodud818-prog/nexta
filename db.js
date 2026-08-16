@@ -1466,6 +1466,20 @@ function listIgPosts(userId, limit) {
   return db.prepare("SELECT * FROM ig_posts WHERE user_id = ? ORDER BY scheduled_for ASC LIMIT ?")
     .all(userId, limit || 40).map(hydrateIgPost);
 }
+/** 단건 조회. 반드시 user_id를 같이 걸어 남의 게시물을 못 집게 한다. */
+function getIgPost(userId, id) {
+  const r = db.prepare("SELECT * FROM ig_posts WHERE id = ? AND user_id = ?").get(id, userId);
+  return r ? hydrateIgPost(r) : null;
+}
+
+/* 손으로 올릴 때 쓰는 잠금. 자동 발행의 claimIgPost와 같은 이유로 필요하다 —
+   버튼을 두 번 누르면 이미지가 두 번 만들어지고 크레딧이 두 번 나간다. */
+function claimIgPostForManual(userId, id) {
+  return db.prepare(
+    "UPDATE ig_posts SET status = 'posting' WHERE id = ? AND user_id = ? AND status IN ('planned','failed')"
+  ).run(id, userId).changes === 1;
+}
+
 function deleteIgPost(userId, id) {
   db.prepare("DELETE FROM ig_posts WHERE id = ? AND user_id = ? AND status IN ('planned','failed')")
     .run(id, userId);
@@ -1735,6 +1749,7 @@ module.exports = {
   getIgTrend, saveIgTrend,
   addLead, listLeads, setLeadDraft, setLeadStatus,
   getIgTarget, upsertIgTarget, addIgPosts, listIgPosts, deleteIgPost,
+  getIgPost, claimIgPostForManual,
   getDueIgPosts, markIgPost, claimIgPost, recordIgGrowth, listIgGrowth,
   addQueueItem, listQueue, countPendingQueue, nextPendingQueueItem, markQueueItem, deleteQueueItem,
   getSchedule, upsertSchedule, getDueSchedules, markScheduleRun,

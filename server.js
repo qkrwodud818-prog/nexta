@@ -2470,6 +2470,107 @@ app.post("/api/instagram/trends", async (req, res) => {
   }
 });
 
+/* ══════════════════════════════════════════════════════════════
+   ⑨ 손으로 올리기 — API 심사를 기다리는 동안에도 계정을 키운다
+
+   인스타 자동 발행은 비즈니스 계정 + 메타 앱 심사가 끝나야 열린다. 그 전까지 계획된 글은
+   예정 시각이 와도 "연결 안 됨"으로 건너뛰기만 하고, 이미지조차 만들어지지 않는다.
+   기획은 되는데 결과물을 손에 쥘 수가 없으니 그동안은 아무것도 못 하는 셈이었다.
+
+   그래서 발행 없이 이미지만 뽑는 길을 연다. 받아서 직접 올리면 오늘부터 계정이 큰다.
+   ══════════════════════════════════════════════════════════════ */
+app.post("/api/instagram/posts/:id/render", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) return res.status(402).json({ error: "이용 기간이 지났습니다. 다시 결제해 주세요." });
+
+  const post = db.getIgPost(u.id, req.params.id);
+  if (!post) return res.status(404).json({ error: "게시물을 찾을 수 없습니다." });
+
+  const cost = post.kind === "reels" ? COST_IG_REELS : COST_IG_CARDNEWS;
+  if ((u.credits || 0) < cost) {
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다." });
+  }
+
+  /* 버튼을 두 번 누르면 이미지가 두 번 만들어지고 크레딧이 두 번 나간다.
+     자동 발행과 같은 방식으로, 집는 순간 잠근다. */
+  if (!db.claimIgPostForManual(u.id, post.id)) {
+    return res.status(409).json({ error: "이미 만들었거나 처리 중인 게시물이에요." });
+  }
+
+  const slug = crypto.randomBytes(6).toString("hex");
+  const outDir = path.join(__dirname, "public", "cardnews", slug);
+  const videoDir = path.join(__dirname, "public", "shorts", slug);
+
+  try {
+    await renderPostAssets(post, u.id, outDir);
+    const files = ["slide1.png", "slide2.png", "slide3.png"];
+
+    /* 자동 발행 때는 인스타 서버가 가지러 오므로 절대 주소여야 하지만, 여기서는 사용자의
+       브라우저가 같은 서버에서 받아간다. 상대 경로면 어느 도메인에 올라가 있든 항상 맞는다. */
+    const urls = files.map((f) => "/cardnews/" + slug + "/" + f);
+
+    let videoUrl = null;
+    if (post.kind === "reels") {
+      fs.mkdirSync(videoDir, { recursive: true });
+      await generateShort(files.map((f) => path.join(outDir, f)), path.join(videoDir, "reel.mp4"));
+      videoUrl = "/shorts/" + slug + "/reel.mp4";
+    }
+
+    db.updateCredits(u.id, Math.max(0, (u.credits || 0) - cost), u.ceiling);
+    db.addUsage(u.id, {
+      at: nowKR(), amount: cost,
+      kind: post.kind === "reels" ? "릴스 만들기(직접 올리기)" : "카드뉴스 만들기(직접 올리기)",
+      label: post.title,
+    });
+
+    /* done으로 닫는다. planned로 두면 나중에 인스타를 연결한 순간 스케줄러가 같은 글을
+       한 번 더 올린다 — 손으로 올린 것과 겹쳐서 같은 글이 두 번 나간다. */
+    db.markIgPost(post.id, "done", {
+      mediaUrls: videoUrl ? urls.concat([videoUrl]) : urls,
+      postedAt: new Date().toISOString(),
+    });
+
+    res.json({
+      ok: true, kind: post.kind, imageUrls: urls, videoUrl,
+      caption: post.caption, credits: Math.max(0, (u.credits || 0) - cost),
+    });
+  } catch (e) {
+    // 실패하면 다시 시도할 수 있게 planned로 되돌린다. 잠긴 채로 두면 영영 못 만든다.
+    db.markIgPost(post.id, "planned", { error: String(e.message || e).slice(0, 300) });
+    // 반쯤 만들다 만 영상은 지운다. 성공했을 때는 사용자가 아직 안 받았으므로 남겨 둔다 —
+    // 자동 발행과 다른 점이다. 거기서는 인스타가 이미 가져간 뒤라 지우는 게 맞다.
+    fs.rmSync(videoDir, { recursive: true, force: true });
+    res.status(500).json({ error: "만들기 실패: " + e.message });
+  }
+});
+
+/* 손으로 올린 글의 성과를 직접 넣는다.
+   이게 없으면 API 심사 전까지 성과가 한 건도 안 쌓이고, 그러면 "터진 글 레퍼런스"도
+   영영 작동하지 않는다. 숫자는 인스타 인사이트 화면에서 보고 옮겨 적으면 된다. */
+app.post("/api/instagram/posts/:id/perf", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+
+  const post = db.getIgPost(u.id, req.params.id);
+  if (!post) return res.status(404).json({ error: "게시물을 찾을 수 없습니다." });
+
+  const b = req.body || {};
+  const num = (v) => Math.max(0, Math.min(100000000, parseInt(v, 10) || 0));
+  const metrics = {
+    views: num(b.views), followerDelta: num(b.followerDelta),
+    saves: num(b.saves), linkClicks: num(b.linkClicks), leads: num(b.leads),
+  };
+
+  /* 날짜별로 쌓는다. 같은 날 다시 넣으면 덮어쓴다 — 어제 100이던 게 오늘 300이 됐을 때
+     둘을 더하면 400이 되어 버린다. 인스타가 주는 건 누적값이라 덮어쓰는 쪽이 맞다. */
+  const onDate = /^\d{4}-\d{2}-\d{2}$/.test(String(b.onDate || ""))
+    ? b.onDate : kstSlot().slice(0, 10);
+
+  db.recordPerf(post.id, onDate, metrics);
+  res.json({ ok: true, onDate, metrics, posts: db.listIgPosts(u.id, 40) });
+});
+
 /* ── ⑧ 수익화 Phase 1 — 제휴 링크 UTM ─────────────────────
    링크에 캠페인 이름만 붙여 두면, 어느 게시물이 실제로 사람을 데려왔는지 나중에 갈라볼 수 있다. */
 app.post("/api/instagram/posts/:id/link", (req, res) => {
@@ -2618,6 +2719,24 @@ app.post("/api/instagram/sync", async (req, res) => {
 /* ── 발행기 ──────────────────────────────────────────────────
    예정 시각이 된 게시물 하나를 실제 이미지/영상으로 만들어 인스타에 올린다.
    크레딧은 만들기 직전에 확인하고, 발행에 성공한 뒤에 뺀다. */
+/* 카드 이미지 만들기. 자동 발행과 손으로 올리기가 같은 그림을 써야 하므로 한 곳에 둔다.
+   여기서 갈라지면 "미리보기와 실제로 올라간 게 다르다"가 된다. */
+async function renderPostAssets(post, userId, outDir) {
+  return generateCardNews(
+    {
+      name: post.title, hook: post.hook, tag: "오늘의 발견",
+      bullets: post.bullets, price: "", commentKeyword: "정보",
+      // 계정마다 하나로 고정된 디자인. 이걸 안 넘기면 카드마다 색이 달라진다.
+      style: (db.getIgTarget(userId) || {}).style,
+      /* 제휴 링크를 실제로 붙인 게시물에만 고지문구가 나간다. */
+      disclosure: post.monetization && post.monetization.type === "affiliate"
+        ? AFFILIATE_DISCLOSURE
+        : "",
+    },
+    outDir
+  );
+}
+
 async function runIgPost(post) {
   const user = db.getUserById(post.userId);
   if (!user) return db.markIgPost(post.id, "skipped", { error: "사용자 없음" });
@@ -2634,19 +2753,7 @@ async function runIgPost(post) {
   const videoDir = path.join(__dirname, "public", "shorts", slug);
 
   try {
-    await generateCardNews(
-      {
-        name: post.title, hook: post.hook, tag: "오늘의 발견",
-        bullets: post.bullets, price: "", commentKeyword: "정보",
-        // 계정마다 하나로 고정된 디자인. 이걸 안 넘기면 카드마다 색이 달라진다.
-        style: (db.getIgTarget(user.id) || {}).style,
-        /* 제휴 링크를 실제로 붙인 게시물에만 고지문구가 나간다. */
-        disclosure: post.monetization && post.monetization.type === "affiliate"
-          ? "이 포스팅은 제휴 마케팅 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다."
-          : "",
-      },
-      outDir
-    );
+    await renderPostAssets(post, user.id, outDir);
     const files = ["slide1.png", "slide2.png", "slide3.png"];
     const urls = files.map((f) => PUBLIC_BASE_URL + "/cardnews/" + slug + "/" + f);
     const token = decryptSecret(social.accessTokenEnc);

@@ -646,6 +646,28 @@
     color:var(--ink); cursor:pointer; }
   .hour-pick button:hover{ border-color:var(--purple); color:var(--purple); }
 
+  /* ══════ 만들어서 직접 올리기 ══════ */
+  .ig-post .mk{ font-size:11.5px; font-weight:600; padding:4px 10px; border-radius:999px;
+    border:1px solid var(--line); background:#fff; color:var(--purple); cursor:pointer;
+    white-space:nowrap; margin-left:6px; }
+  .ig-post .mk:hover{ border-color:var(--purple); background:var(--wash); }
+  .ig-post .mk:disabled{ opacity:.5; cursor:default; }
+  .made-box{ margin-top:14px; border:1px solid var(--line); border-radius:var(--r-2);
+    padding:16px; background:#fff; }
+  .made-head b{ display:block; font-size:14px; margin-bottom:4px; }
+  .made-head span{ font-size:12.5px; color:var(--soft); }
+  .made-slides{ display:flex; gap:10px; margin:14px 0; overflow-x:auto; padding-bottom:4px; }
+  .made-slide{ flex:0 0 148px; }
+  .made-slide img{ width:100%; border-radius:var(--r-1); border:1px solid var(--line); display:block; }
+  .made-slide a, .made-vid a{ display:block; text-align:center; font-size:12px; margin-top:6px;
+    color:var(--purple); text-decoration:none; font-weight:600; }
+  .made-slide a:hover, .made-vid a:hover{ text-decoration:underline; }
+  .made-cap b{ display:block; font-size:12px; color:var(--soft); margin-bottom:6px; }
+  .made-cap textarea{ width:100%; min-height:92px; font-size:13px; line-height:1.7;
+    padding:10px 12px; border:1px solid var(--line); border-radius:var(--r-1);
+    background:var(--bg); color:var(--ink); resize:vertical; }
+  .made-cap button{ margin-top:8px; }
+
   /* ══════ 트렌드 조사 ══════ */
   .trend-box{ border:1px solid var(--line); border-radius:var(--r-2); padding:15px 16px; background:#fff; }
   .trend-empty{ font-size:12.5px; color:var(--soft); line-height:1.7; }
@@ -1338,6 +1360,7 @@
 
         <div class="t-label" style="margin:22px 0 12px;">올릴 예정</div>
         <div class="ig-box" id="igPosts"><div class="ig-empty">아직 계획된 게시물이 없어요.</div></div>
+        <div class="made-box" id="madeBox" style="display:none;"></div>
       </div>
     </div>
   </div>
@@ -2412,12 +2435,74 @@ function renderIgPosts(posts){
       +   '<span class="wh">' + esc(x.scheduledFor) + ':00'
       +   (x.error ? ' · ' + esc(x.error) : '') + '</span></span>'
       + '<span class="st ' + x.status + '">' + (LABEL[x.status] || x.status) + '</span>'
+      /* 인스타를 아직 연결 못 했으면 자동 발행이 안 된다. 그렇다고 손 놓고 기다릴 이유는
+         없어서, 만들어 받아 직접 올리는 버튼을 같이 둔다. */
+      + (removable ? '<button class="mk" data-make="' + esc(x.id) + '" title="만들어서 직접 올리기">만들기</button>' : '')
+      + (x.status === 'done' ? '<button class="mk" data-perf="' + esc(x.id) + '" title="성과 입력">성과</button>' : '')
       + (removable ? '<button class="rm" data-del="' + esc(x.id) + '" title="빼기">×</button>' : '')
       + '</div>';
   }).join('');
   box.querySelectorAll('[data-del]').forEach(function(b){
     b.onclick = function(){ delIgPost(b.getAttribute('data-del')); };
   });
+  box.querySelectorAll('[data-make]').forEach(function(b){
+    b.onclick = function(){ makeIgPost(b.getAttribute('data-make'), b); };
+  });
+  box.querySelectorAll('[data-perf]').forEach(function(b){
+    b.onclick = function(){ openPerfEntry(b.getAttribute('data-perf')); };
+  });
+}
+
+/* 발행 없이 이미지·영상만 뽑는다. 받아서 인스타에 직접 올리는 용도다. */
+function makeIgPost(id, btn){
+  btn.disabled = true; btn.textContent = '만드는 중…';
+  igApi('/api/instagram/posts/' + encodeURIComponent(id) + '/render', {})
+    .then(function(d){
+      showMadePost(d);
+      if(d.credits != null && me){ me.credits = d.credits; renderCredits(me); }
+      loadInstagram();
+    })
+    .catch(function(e){ alert(e.message); btn.disabled = false; btn.textContent = '만들기'; });
+}
+
+/* 만든 결과를 바로 보여준다 — 이미지와 본문을 한 화면에서 받아가야 실제로 올릴 수 있다. */
+function showMadePost(d){
+  var box = document.getElementById('madeBox');
+  var imgs = (d.imageUrls || []).map(function(u, i){
+    return '<div class="made-slide"><img src="' + esc(u) + '" alt="슬라이드 ' + (i+1) + '">'
+      + '<a href="' + esc(u) + '" download target="_blank" rel="noopener">' + (i+1) + '장 받기</a></div>';
+  }).join('');
+  box.innerHTML =
+    '<div class="made-head"><b>' + (d.kind === 'reels' ? '릴스가 준비됐어요' : '카드뉴스가 준비됐어요') + '</b>'
+    + '<span>인스타에 올린 뒤, 며칠 지나 성과 버튼으로 숫자를 넣어 주세요.</span></div>'
+    + '<div class="made-slides">' + imgs + '</div>'
+    + (d.videoUrl ? '<div class="made-vid"><a href="' + esc(d.videoUrl) + '" download target="_blank" rel="noopener">릴스 영상 받기</a></div>' : '')
+    + '<div class="made-cap"><b>본문 (복사해서 붙여 넣으세요)</b>'
+    + '<textarea readonly id="madeCaption">' + esc(d.caption || '') + '</textarea>'
+    + '<button class="btn-sm" id="madeCopy">본문 복사</button></div>';
+  box.style.display = 'block';
+  box.scrollIntoView({ behavior:'smooth', block:'nearest' });
+  document.getElementById('madeCopy').onclick = function(){
+    var t = document.getElementById('madeCaption');
+    t.select();
+    // 클립보드 API가 막힌 환경(비 HTTPS 등)에서도 최소한 선택은 되게 둔다.
+    if(navigator.clipboard){ navigator.clipboard.writeText(t.value).then(function(){ celebrate('본문을 복사했어요'); }); }
+    else { document.execCommand('copy'); celebrate('본문을 복사했어요'); }
+  };
+}
+
+/* 인스타 인사이트에서 본 숫자를 옮겨 적는다. 이게 쌓여야 "터진 글" 판별이 작동한다. */
+function openPerfEntry(id){
+  var views = prompt('조회수 (인스타 인사이트에서 본 숫자)');
+  if(views === null) return;
+  var saves = prompt('저장 수 (모르면 0)', '0');
+  if(saves === null) return;
+  var delta = prompt('이 글로 늘어난 팔로워 (모르면 0)', '0');
+  if(delta === null) return;
+  igApi('/api/instagram/posts/' + encodeURIComponent(id) + '/perf',
+        { views: views, saves: saves, followerDelta: delta })
+    .then(function(d){ celebrate('성과를 기록했어요'); renderIgPosts(d.posts || igState.posts); })
+    .catch(function(e){ alert(e.message); });
 }
 
 function applyIg(d){
