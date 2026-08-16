@@ -646,6 +646,21 @@
     color:var(--ink); cursor:pointer; }
   .hour-pick button:hover{ border-color:var(--purple); color:var(--purple); }
 
+  /* ══════ 트렌드 조사 ══════ */
+  .trend-box{ border:1px solid var(--line); border-radius:var(--r-2); padding:15px 16px; background:#fff; }
+  .trend-empty{ font-size:12.5px; color:var(--soft); line-height:1.7; }
+  .trend-actions{ display:flex; align-items:center; gap:11px; margin-top:13px; flex-wrap:wrap; }
+  .trend-meta{ font-size:11.5px; color:var(--soft); }
+  .trend-tags{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+  .trend-tags span{ font-family:var(--f-data); font-size:11.5px; padding:3px 9px;
+    background:var(--wash); color:var(--purple); border-radius:999px; }
+  .trend-sec{ margin-bottom:11px; }
+  .trend-sec b{ display:block; font-size:11.5px; color:var(--soft); margin-bottom:5px;
+    letter-spacing:.03em; }
+  .trend-sec li{ font-size:13px; line-height:1.75; margin-left:15px; color:var(--ink); }
+  .trend-sec p{ font-size:13px; line-height:1.7; color:var(--ink); }
+  .trend-sec.warn li{ color:#c0563f; }
+
   /* ══════ 사업 진단 ══════ */
   .biz-result{ margin-top:16px; border-top:1px solid var(--line); padding-top:16px; }
   .biz-top{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:4px; }
@@ -1265,6 +1280,21 @@
           <label style="display:flex;align-items:center;gap:8px;margin-top:15px;font-weight:600;">
             <input type="checkbox" id="igEnabled" style="width:auto;"> 자동 발행 켜기
           </label>
+
+          <div class="section-header" style="margin-top:24px;">
+            <div class="section-title">지금 뭐가 먹히나</div>
+          </div>
+          <div class="trend-box" id="trendBox">
+            <div class="trend-empty" id="trendEmpty">
+              계정 주제의 해시태그에서 지금 인기 있는 게시물을 조사해,
+              요즘 어떤 식으로 첫 줄을 여는지 뽑아냅니다. 조사한 형태는 다음 콘텐츠 기획에 자동으로 반영돼요.
+            </div>
+            <div id="trendBody" style="display:none;"></div>
+            <div class="trend-actions">
+              <button class="btn-sm pri" id="trendBtn">트렌드 조사</button>
+              <span class="trend-meta" id="trendMeta"></span>
+            </div>
+          </div>
 
           <div class="ig-actions">
             <button class="bigbtn gh" id="igSaveBtn">타깃 저장</button>
@@ -2250,6 +2280,62 @@ function renderIgCost(){
   el.textContent = n ? ('주 ' + n + '개 = 카드뉴스 ' + cards + ' + 릴스 ' + reels + ' · 약 ' + total + ' 크레딧') : '';
 }
 
+/* ══════ 트렌드 조사 ══════ */
+function renderTrend(d){
+  var body = document.getElementById('trendBody');
+  var empty = document.getElementById('trendEmpty');
+  var meta = document.getElementById('trendMeta');
+  var t = d && d.trend;
+
+  if(!t || !t.summary){
+    body.style.display = 'none'; empty.style.display = 'block';
+    meta.textContent = '15 크레딧 · 조사 결과는 12시간 동안 다시 씁니다';
+    return;
+  }
+
+  var s = t.summary;
+  var sec = function(title, items, cls){
+    if(!items || !items.length) return '';
+    return '<div class="trend-sec' + (cls || '') + '"><b>' + title + '</b><ul>'
+      + items.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+  };
+
+  body.innerHTML =
+    '<div class="trend-tags">' + (t.tags||[]).map(function(x){ return '<span>#' + esc(x) + '</span>'; }).join('') + '</div>'
+    + sec('첫 줄을 여는 방식', s.hookPatterns)
+    + (s.avgHookLength ? '<div class="trend-sec"><b>첫 줄 길이</b><p>' + s.avgHookLength + '자 안팎</p></div>' : '')
+    + sec('자주 다뤄지는 소재', s.topics)
+    + (s.toneNote ? '<div class="trend-sec"><b>말투</b><p>' + esc(s.toneNote) + '</p></div>' : '')
+    + sec('이미 흔해서 피할 것', s.avoid, ' warn');
+  body.style.display = 'block'; empty.style.display = 'none';
+
+  // 언제 조사한 건지 안 적으면, 오래된 결과를 최신인 줄 알고 쓴다.
+  var hours = Math.floor((Date.now() - new Date(t.fetchedAt).getTime()) / 3600000);
+  var when = hours < 1 ? '방금' : (hours + '시간 전');
+  meta.textContent = when + ' 조사 · 상위 ' + t.samples + '건 기준'
+    + (d.fresh === false ? ' · 오래됐어요, 다시 조사해 보세요' : '');
+}
+
+function loadTrend(){
+  igApi('/api/instagram/trends').then(renderTrend).catch(function(){});
+}
+
+document.getElementById('trendBtn').onclick = function(){
+  var btn = this;
+  btn.disabled = true; btn.textContent = '조사 중…';
+  igApi('/api/instagram/trends', {})
+    .then(function(d){
+      renderTrend({ trend: d.trend, fresh: true });
+      if(d.cached) celebrate('최근 조사 결과를 그대로 씁니다');
+      else {
+        celebrate('트렌드를 반영했어요 — 다음 콘텐츠부터 적용됩니다');
+        if(d.credits != null && me){ me.credits = d.credits; renderCredits(me); }
+      }
+    })
+    .catch(function(e){ alert(e.message); })
+    .then(function(){ btn.disabled = false; btn.textContent = '트렌드 조사'; });
+};
+
 /* 고른 디자인은 화면에만 두지 않고 igState에 남긴다 — 저장할 때 여기서 읽어 간다. */
 function renderIgStyles(picked){
   var box = document.getElementById('igStyles');
@@ -2348,6 +2434,7 @@ function loadInstagram(){
   loadPerformance();
   loadBestHours();
   loadLeads();
+  loadTrend();
   igApi('/api/instagram/overview').then(applyIg).catch(function(e){ console.warn(e); });
 }
 

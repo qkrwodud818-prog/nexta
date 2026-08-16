@@ -22,7 +22,8 @@ require("dotenv").config();
 const { generateCardNews, STYLES: CARD_STYLES, DEFAULT_STYLE: CARD_DEFAULT_STYLE } = require("./social/cardnews");
 const { generateShort } = require("./social/shorts");
 const { generateDemoVideo, buildCaption } = require("./social/demo-video");
-const { publishCarouselPost, publishReel, fetchProfileStats, verifyWebhook, handleCommentWebhook } = require("./social/instagram");
+const { publishCarouselPost, publishReel, fetchProfileStats, verifyWebhook, handleCommentWebhook,
+        collectHashtagTrends } = require("./social/instagram");
 const db = require("./db"); // SQLite(better-sqlite3) 기반 저장소 — data/nexta.db
 
 const app = express();
@@ -2259,13 +2260,26 @@ app.post("/api/instagram/plan", async (req, res) => {
       "\n왜 걸렸는지 짐작해서 그 구조(문장 길이, 시작하는 방식, 다루는 각도)를 이번 것에도 쓴다.\n"
     : "";
 
+  /* 바깥에서 지금 먹히는 형태. 내 계정 기록이 아직 없을 때 특히 이게 유일한 근거가 된다.
+     오래된 조사는 넣지 않는다 — 지난달 트렌드를 따라가면 늦은 티가 난다. */
+  const trend = db.getIgTrend(u.id);
+  const trendBlock = trendIsFresh(trend)
+    ? "\n[지금 이 판에서 먹히는 형태 — " + trend.tags.map((t) => "#" + t).join(" ") + " 상위 " + trend.samples + "건 분석]\n" +
+      "- 첫 줄 여는 방식: " + trend.summary.hookPatterns.join(" / ") + "\n" +
+      (trend.summary.avgHookLength ? "- 첫 줄 길이는 " + trend.summary.avgHookLength + "자 안팎이 많다\n" : "") +
+      (trend.summary.topics.length ? "- 자주 다뤄지는 소재: " + trend.summary.topics.join(", ") + "\n" : "") +
+      (trend.summary.toneNote ? "- 말투: " + trend.summary.toneNote + "\n" : "") +
+      (trend.summary.avoid.length ? "- 이미 흔해서 피할 것: " + trend.summary.avoid.join(", ") + "\n" : "") +
+      "형태만 참고한다. 남의 문장을 그대로 쓰지 않는다.\n"
+    : "";
+
   const prompt =
     "너는 인스타그램 계정을 키우는 콘텐츠 기획자다.\n" +
     personaBlock +
     "계정 주제: " + t.topic + "\n" +
     "말투: " + t.tone + "\n" +
     "만들 개수: " + want + "개 (이 중 " + reels + "개는 릴스, 나머지는 카드뉴스)\n" +
-    referenceBlock + "\n" +
+    trendBlock + referenceBlock + "\n" +
     "아래 순서대로 각 번호에 맞는 목적의 글감을 하나씩 만든다:\n" + purposeBlock + "\n\n" +
     "대상이 저장하거나 공유할 만한 것만 만든다. 광고 문구, 과장, 근거 없는 수치는 쓰지 않는다.\n" +
     "hook은 첫 화면에 크게 들어갈 한 줄이라 18자를 넘기지 않는다.\n" +
@@ -2319,6 +2333,140 @@ app.post("/api/instagram/plan", async (req, res) => {
     res.json({ ok: true, added: rows.length, posts: db.listIgPosts(u.id, 40) });
   } catch (e) {
     res.status(500).json({ error: "콘텐츠 계획 실패: " + e.message });
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════
+   ⑦ 트렌드 조사 — 지금 인스타에서 먹히는 카드뉴스가 어떤 모양인지
+
+   세 영상이 공통으로 말한 건 "창작하지 말고 레퍼런스를 먼저 보라"였다. 앞에서는 내 계정의
+   과거 성과를 봤고, 여기서는 바깥을 본다. 계정 주제에 걸린 해시태그의 인기 게시물을
+   메타 공식 API로 실시간 조회해서, 요즘 어떤 식으로 말을 거는지 패턴을 뽑는다.
+
+   가져오는 건 캡션과 반응 수까지다. 남의 카드 이미지는 받지도 저장하지도 않는다 —
+   디자인을 복제하면 그건 표절이고, 어차피 필요한 건 구조지 그림이 아니다.
+
+   메타가 계정당 7일 30개 해시태그로 막아 두기 때문에 결과를 캐시한다.
+   ══════════════════════════════════════════════════════════════ */
+const COST_TREND = 15;              // 모델 호출 한 번. 조사 자체는 메타가 과금하지 않는다.
+const TREND_CACHE_HOURS = 12;       // 트렌드가 반나절 만에 뒤집히지는 않는다
+const TREND_MAX_TAGS = 3;           // 7일 30개 제한 → 하루 두 번 눌러도 한 주를 버틴다
+const TREND_PER_TAG = 25;
+
+function trendIsFresh(t) {
+  if (!t || !t.fetchedAt || !t.summary) return false;
+  return Date.now() - new Date(t.fetchedAt).getTime() < TREND_CACHE_HOURS * 3600000;
+}
+
+/** 계정 주제·해시태그에서 조사할 태그를 고른다. 사용자가 적은 게 있으면 그게 우선이다. */
+function trendTagsFor(target) {
+  const fromField = String((target && target.hashtags) || "")
+    .split(/[\s,]+/).map((x) => x.replace(/^#/, "").trim()).filter(Boolean);
+  if (fromField.length) return fromField.slice(0, TREND_MAX_TAGS);
+  // 해시태그를 안 적었으면 주제에서 만든다. 공백은 인스타 해시태그에 못 들어간다.
+  const fromTopic = String((target && target.topic) || "").replace(/[#\s]+/g, "");
+  return fromTopic ? [fromTopic] : [];
+}
+
+app.get("/api/instagram/trends", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  const cached = db.getIgTrend(u.id);
+  res.json({
+    trend: cached, fresh: trendIsFresh(cached),
+    cost: COST_TREND, cacheHours: TREND_CACHE_HOURS, maxTags: TREND_MAX_TAGS,
+  });
+});
+
+app.post("/api/instagram/trends", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) return res.status(402).json({ error: "이용 기간이 지났습니다. 다시 결제해 주세요." });
+
+  const social = u.social && u.social.instagram;
+  if (!social) {
+    return res.status(400).json({
+      error: "트렌드 조사는 인스타그램 계정을 연결해야 씁니다. 메타가 연결된 비즈니스 계정에만 해시태그 조회를 열어 둡니다.",
+    });
+  }
+
+  const cached = db.getIgTrend(u.id);
+  // 강제로 다시 부르는 게 아니면 캐시를 준다. 쿼터를 아끼는 게 사용자에게 이득이다.
+  if (!req.body || !req.body.force) {
+    if (trendIsFresh(cached)) return res.json({ ok: true, trend: cached, cached: true });
+  }
+
+  const target = db.getIgTarget(u.id);
+  const tags = trendTagsFor(target);
+  if (!tags.length) return res.status(400).json({ error: "먼저 계정 주제나 해시태그를 저장해 주세요." });
+  if ((u.credits || 0) < COST_TREND) {
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다." });
+  }
+
+  try {
+    const token = decryptSecret(social.accessTokenEnc);
+    const { items, failed, tagsUsed } = await collectHashtagTrends(
+      social.igUserId, token, tags, TREND_PER_TAG
+    );
+
+    /* 캡션이 있는 것만 쓴다. 반응 순으로 잘라 상위만 모델에 넘긴다 —
+       전부 넘기면 토큰만 먹고 패턴은 오히려 흐려진다. */
+    const top = items
+      .filter((m) => m.caption && m.caption.length > 10)
+      .sort((a, b) => (b.likes + b.comments * 3) - (a.likes + a.comments * 3))
+      .slice(0, 20);
+
+    if (top.length < 3) {
+      return res.status(502).json({
+        error: failed.length === tags.length
+          ? "해시태그를 조회하지 못했어요. 메타 앱에 해시태그 조회 권한이 있는지 확인해 주세요."
+          : "표본이 너무 적어요. 해시태그를 더 넓은 것으로 바꿔 보세요.",
+      });
+    }
+
+    /* 캡션 원문을 그대로 저장하지 않는다. 모델에는 패턴을 뽑는 재료로만 넣고,
+       남는 건 "이런 형태가 먹힌다"는 요약뿐이다. */
+    const sampleBlock = top.map((m, i) =>
+      (i + 1) + ") [" + m.tag + " · 반응 " + (m.likes + m.comments) + "] " +
+      m.caption.replace(/\s+/g, " ").slice(0, 180)
+    ).join("\n");
+
+    const prompt =
+      "너는 인스타그램 콘텐츠를 분석하는 기획자다. 아래는 지금 인기 상위에 있는 게시물의 첫 문장들이다.\n\n" +
+      sampleBlock + "\n\n" +
+      "이 글들에서 공통으로 반복되는 형태를 뽑는다. 내용을 요약하지 말고 형태만 본다.\n" +
+      "- hookPatterns: 첫 줄을 여는 방식 3가지. 실제 문장이 아니라 틀로 쓴다 (예: \"숫자로 시작해 손해를 말한다\").\n" +
+      "- avgHookLength: 첫 줄 평균 글자 수 (정수).\n" +
+      "- topics: 지금 자주 다뤄지는 소재 3개.\n" +
+      "- toneNote: 말투를 한 문장으로.\n" +
+      "- avoid: 이 판에서 이미 흔해져서 피하는 게 나은 것 2가지.\n" +
+      "특정 게시물의 문장을 그대로 옮기지 않는다.\n\n" +
+      "설명 없이 JSON만 출력한다:\n" +
+      '{"hookPatterns":["","",""],"avgHookLength":0,"topics":["","",""],"toneNote":"","avoid":["",""]}';
+
+    const raw = await callWithFallback(loadModelConfig(), "전문_SNS콘텐츠", prompt, false, 900,
+      { userId: u.id, kind: "ig_trend" });
+    const parsed = parseJSON(raw);
+    if (!parsed || !Array.isArray(parsed.hookPatterns)) {
+      return res.status(502).json({ error: "패턴을 못 뽑았어요. 잠시 뒤 다시 시도해 주세요." });
+    }
+
+    const summary = {
+      hookPatterns: parsed.hookPatterns.slice(0, 3).map((x) => String(x).slice(0, 120)),
+      avgHookLength: Math.max(0, Math.min(200, parseInt(parsed.avgHookLength, 10) || 0)),
+      topics: (Array.isArray(parsed.topics) ? parsed.topics : []).slice(0, 3).map((x) => String(x).slice(0, 60)),
+      toneNote: String(parsed.toneNote || "").slice(0, 160),
+      avoid: (Array.isArray(parsed.avoid) ? parsed.avoid : []).slice(0, 2).map((x) => String(x).slice(0, 120)),
+    };
+
+    db.saveIgTrend(u.id, { tags, summary, samples: top.length, tagsUsed });
+    const credits = Math.max(0, (u.credits || 0) - COST_TREND);
+    db.updateCredits(u.id, credits, u.ceiling);
+    db.addUsage(u.id, { at: nowKR(), amount: COST_TREND, kind: "트렌드 조사", label: tags.join(", ") });
+
+    res.json({ ok: true, trend: db.getIgTrend(u.id), cached: false, failedTags: failed, credits });
+  } catch (e) {
+    res.status(500).json({ error: "트렌드 조사 실패: " + e.message });
   }
 });
 

@@ -169,7 +169,80 @@ async function fetchProfileStats(igUserId, accessToken) {
   };
 }
 
+/* ── 해시태그 인기 게시물 (트렌드 조사) ─────────────────────────
+   메타가 공식으로 여는 창구는 이 두 개뿐이다:
+     1) /ig_hashtag_search  — 해시태그 이름 → 해시태그 ID
+     2) /{hashtag-id}/top_media — 그 태그에서 지금 잘 나가는 게시물
+
+   가져올 수 있는 건 캡션과 반응 수까지고, 남의 카드 이미지 자체는 가져오지 않는다.
+   디자인을 베끼는 게 아니라 "요즘 어떤 식으로 말을 걸고 있나"를 보는 용도다.
+
+   메타 제한 — 계정 하나가 7일 동안 조회할 수 있는 해시태그는 30개까지다.
+   그래서 호출부에서 반드시 캐시를 쓴다. */
+
+async function graphGet(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = (data && data.error && data.error.message) || JSON.stringify(data);
+    throw new Error(msg);
+  }
+  return data;
+}
+
+/** 해시태그 이름 → ID. 없는 태그면 null (오류가 아니라 그냥 결과 없음이다). */
+async function findHashtagId(igUserId, accessToken, tag) {
+  const clean = String(tag || "").replace(/^#/, "").trim();
+  if (!clean) return null;
+  const data = await graphGet(
+    `${GRAPH}/ig_hashtag_search?user_id=${encodeURIComponent(igUserId)}` +
+    `&q=${encodeURIComponent(clean)}&access_token=${encodeURIComponent(accessToken)}`
+  );
+  return (data.data && data.data[0] && data.data[0].id) || null;
+}
+
+/** 그 해시태그에서 지금 상위에 있는 게시물. 캡션과 반응 수만 본다. */
+async function fetchHashtagTopMedia(igUserId, accessToken, hashtagId, limit) {
+  const data = await graphGet(
+    `${GRAPH}/${hashtagId}/top_media?user_id=${encodeURIComponent(igUserId)}` +
+    `&fields=caption,media_type,like_count,comments_count,permalink` +
+    `&limit=${Math.max(1, Math.min(50, limit || 25))}` +
+    `&access_token=${encodeURIComponent(accessToken)}`
+  );
+  return (data.data || []).map((m) => ({
+    caption: String(m.caption || ""),
+    mediaType: m.media_type || "",
+    likes: Number(m.like_count || 0),
+    comments: Number(m.comments_count || 0),
+    permalink: m.permalink || "",
+  }));
+}
+
+/**
+ * 여러 해시태그를 한 번에 훑어 상위 게시물을 모은다.
+ * 하나가 실패해도 나머지는 살린다 — 태그 하나 때문에 조사 전체가 죽으면 안 된다.
+ * @returns {{ items: object[], failed: string[], tagsUsed: number }}
+ */
+async function collectHashtagTrends(igUserId, accessToken, tags, perTag) {
+  const items = [];
+  const failed = [];
+  let tagsUsed = 0;
+  for (const tag of tags) {
+    try {
+      const id = await findHashtagId(igUserId, accessToken, tag);
+      tagsUsed++;
+      if (!id) { failed.push(tag); continue; }
+      const media = await fetchHashtagTopMedia(igUserId, accessToken, id, perTag);
+      media.forEach((m) => items.push({ ...m, tag: String(tag).replace(/^#/, "") }));
+    } catch (e) {
+      failed.push(tag);
+    }
+  }
+  return { items, failed, tagsUsed };
+}
+
 module.exports = {
   publishCarouselPost, publishReel, fetchProfileStats,
   verifyWebhook, sendPrivateReply, handleCommentWebhook,
+  findHashtagId, fetchHashtagTopMedia, collectHashtagTrends,
 };

@@ -348,6 +348,19 @@ db.exec(`
     PRIMARY KEY (content_id, on_date)
   );
 
+  /* ── 해시태그 트렌드 조사 결과 ────────────────────────────
+     메타는 계정당 7일에 해시태그 30개까지만 조회하게 해 둔다. 버튼을 누를 때마다
+     새로 부르면 사용자가 며칠 만에 쿼터를 다 태우고, 그 뒤로는 조사가 아예 막힌다.
+     그래서 결과를 저장해 두고 정해진 시간 안에는 다시 부르지 않는다. */
+  CREATE TABLE IF NOT EXISTS ig_trends (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    tags TEXT NOT NULL,          -- 조사한 해시태그 (JSON 배열)
+    summary TEXT NOT NULL,       -- 모델이 뽑은 패턴 (JSON)
+    samples INTEGER NOT NULL DEFAULT 0,
+    tags_used INTEGER NOT NULL DEFAULT 0,
+    fetched_at TEXT NOT NULL
+  );
+
   /* ── 대행 리드 (수익화 Phase 1) ───────────────────────────
      인스타 DM·문의로 들어온 사람을 담는 아주 작은 CRM. 비비가 답장 초안을 쓰고,
      보내는 것은 사장님이 승인한 뒤에만 한다. */
@@ -1630,6 +1643,36 @@ function getBreakoutPosts(userId, sinceDate, minMultiple, limit) {
     .map((r) => ({ ...r, multiple: Math.round((r.views / avg) * 10) / 10 }));
 }
 
+/* ── 트렌드 조사 캐시 ─────────────────────────────────────── */
+function getIgTrend(userId) {
+  const r = db.prepare("SELECT * FROM ig_trends WHERE user_id = ?").get(userId);
+  if (!r) return null;
+  const parse = (v, d) => { try { return v ? JSON.parse(v) : d; } catch { return d; } };
+  return {
+    tags: parse(r.tags, []),
+    summary: parse(r.summary, null),
+    samples: r.samples,
+    tagsUsed: r.tags_used,
+    fetchedAt: r.fetched_at,
+  };
+}
+function saveIgTrend(userId, t) {
+  db.prepare(
+    "INSERT INTO ig_trends (user_id, tags, summary, samples, tags_used, fetched_at)" +
+    " VALUES (@userId, @tags, @summary, @samples, @tagsUsed, @at)" +
+    " ON CONFLICT(user_id) DO UPDATE SET" +
+    "   tags = excluded.tags, summary = excluded.summary, samples = excluded.samples," +
+    "   tags_used = excluded.tags_used, fetched_at = excluded.fetched_at"
+  ).run({
+    userId,
+    tags: JSON.stringify(t.tags || []),
+    summary: JSON.stringify(t.summary || null),
+    samples: t.samples || 0,
+    tagsUsed: t.tagsUsed || 0,
+    at: new Date().toISOString(),
+  });
+}
+
 function hydrateLead(r) {
   return {
     id: r.id, source: r.source, handle: r.handle || "", message: r.message,
@@ -1689,6 +1732,7 @@ module.exports = {
   setIgPostLink,
   addPersona, getActivePersona, getPersonaById, listPersonas, activatePersona,
   recordPerf, getPerfByPurpose, getPerfByHour, getBreakoutPosts,
+  getIgTrend, saveIgTrend,
   addLead, listLeads, setLeadDraft, setLeadStatus,
   getIgTarget, upsertIgTarget, addIgPosts, listIgPosts, deleteIgPost,
   getDueIgPosts, markIgPost, claimIgPost, recordIgGrowth, listIgGrowth,
