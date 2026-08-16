@@ -2471,6 +2471,156 @@ app.post("/api/instagram/trends", async (req, res) => {
 });
 
 /* ══════════════════════════════════════════════════════════════
+   ⑩ 정보성 글 — 한 주제를 네 플랫폼 형식으로
+
+   같은 글을 네 군데 그대로 붙여 넣으면 전부 어중간해진다. 쓰레드는 짧은 텍스트가 전부고,
+   샤오홍슈는 제목이 목록에서 잘리며, 틱톡은 귀로 듣는 대본이고, 인스타는 이미지가 먼저다.
+   형식이 다르니 같은 정보라도 다시 써야 한다.
+
+   파는 글이 아니라 정보성으로 간다. #쿠팡파트너스 태그만 127만 개라 그쪽으로 들어가면
+   읽는 사람이 첫 줄에서 광고로 분류하고 넘긴다. 제휴 링크는 본문 끝에 한 번,
+   고지문구와 함께 붙인다 — 숨기면 표시광고법 위반이고, 앞세우면 아무도 안 읽는다.
+   ══════════════════════════════════════════════════════════════ */
+const COST_PACK = 25;
+
+const PLATFORM_SPECS = {
+  threads: {
+    label: "쓰레드",
+    rule:
+      "500자 안에 끝낸다. 첫 줄이 전부라 거기서 안 잡히면 나머지는 안 읽힌다.\n" +
+      "  짧은 문장으로 자주 줄바꿈한다. 문단 하나가 두 줄을 넘지 않는다.\n" +
+      "  해시태그는 아예 안 쓰거나 하나만 쓴다 — 쓰레드에서는 태그가 도달을 늘리지 않는다.\n" +
+      "  마지막 줄은 답글이 달릴 만한 질문으로 닫는다.",
+  },
+  instagram: {
+    label: "인스타그램",
+    rule:
+      "카드뉴스 캡션이다. 첫 두 줄이 '더 보기' 앞에 나오므로 거기서 끝난다고 생각하고 쓴다.\n" +
+      "  본문은 3~4문단, 문단마다 한 줄 비운다.\n" +
+      "  해시태그 5개를 맨 끝에 몰아 쓴다. 제품 이름 태그 말고 사람들이 겪는 문제 태그를 쓴다.",
+  },
+  xiaohongshu: {
+    label: "샤오홍슈",
+    rule:
+      "제목은 20자 이내 — 목록에서 그 이상은 잘린다. 이모지를 제목과 본문에 섞는다.\n" +
+      "  본문은 번호를 매긴 목록 형태로 쓴다. 중국 사용자가 읽으므로 한국어로 쓰되\n" +
+      "  한국 고유명사에는 짧은 설명을 붙인다.\n" +
+      "  태그는 5~8개, 본문 끝에 둔다.",
+  },
+  tiktok: {
+    label: "틱톡",
+    rule:
+      "귀로 듣는 대본이다. 읽는 글이 아니라 말하는 글로 쓴다.\n" +
+      "  첫 3초 안에 왜 봐야 하는지가 나와야 한다. 인사말로 시작하지 않는다.\n" +
+      "  한 문장이 자막 한 줄이라 20자를 넘기지 않는다.\n" +
+      "  '[0-3초]' 처럼 구간을 표시하고, 총 30~45초 분량으로 쓴다.",
+  },
+};
+const PLATFORM_KEYS = Object.keys(PLATFORM_SPECS);
+
+app.get("/api/content/platforms", (req, res) => {
+  res.json({
+    platforms: PLATFORM_KEYS.map((k) => ({ key: k, label: PLATFORM_SPECS[k].label })),
+    cost: COST_PACK,
+  });
+});
+
+app.post("/api/content/pack", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!hasValidAccess(u)) return res.status(402).json({ error: "이용 기간이 지났습니다. 다시 결제해 주세요." });
+
+  const b = req.body || {};
+  const topic = String(b.topic || "").trim().slice(0, 200);
+  if (topic.length < 5) return res.status(400).json({ error: "어떤 정보를 다룰지 한 줄로 적어 주세요." });
+
+  const picked = (Array.isArray(b.platforms) ? b.platforms : PLATFORM_KEYS)
+    .filter((p) => PLATFORM_SPECS[p]);
+  if (!picked.length) return res.status(400).json({ error: "올릴 곳을 하나 이상 골라 주세요." });
+
+  const affiliateUrl = String(b.affiliateUrl || "").trim().slice(0, 500);
+  if (affiliateUrl && !/^https?:\/\//i.test(affiliateUrl)) {
+    return res.status(400).json({ error: "제휴 링크는 http로 시작하는 주소여야 합니다." });
+  }
+  if ((u.credits || 0) < COST_PACK) {
+    return res.status(402).json({ error: "크레딧이 부족합니다. 구독하시면 매달 크레딧이 채워집니다." });
+  }
+
+  const persona = db.getActivePersona(u.id);
+  const personaBlock = persona
+    ? "읽는 사람: " + persona.demographic + "\n그 사람의 불편: " + persona.painPoints.join(", ") + "\n"
+    : "";
+
+  const specBlock = picked
+    .map((p) => "[" + p + " — " + PLATFORM_SPECS[p].label + "]\n  " + PLATFORM_SPECS[p].rule)
+    .join("\n\n");
+
+  const prompt =
+    "너는 정보성 콘텐츠를 쓰는 사람이다. 물건을 파는 글이 아니라, 읽고 나서 뭔가를 알게 되는 글을 쓴다.\n\n" +
+    personaBlock +
+    "다룰 정보: " + topic + "\n\n" +
+    "지켜야 할 것:\n" +
+    "- 읽는 사람이 이 글만 보고도 실행할 수 있어야 한다. 구체적인 숫자, 순서, 조건을 넣는다.\n" +
+    "- 확인되지 않은 수치를 지어내지 않는다. 모르면 범위로 쓰거나 아예 안 쓴다.\n" +
+    "- '지금만', '최저가', '역대급', '무조건' 같은 말은 쓰지 않는다. 광고로 읽히는 순간 안 읽힌다.\n" +
+    "- 제품을 언급하더라도 사라는 말은 하지 않는다. 어떤 상황에 맞고 어떤 경우엔 안 맞는지를 쓴다.\n" +
+    "- 단점이나 한계를 최소 하나는 적는다. 장점만 있는 글은 광고다.\n\n" +
+    "플랫폼마다 형식이 다르다. 같은 내용을 형식에 맞게 각각 다시 쓴다:\n\n" + specBlock + "\n\n" +
+    "설명 없이 JSON만 출력한다:\n" +
+    "{" + picked.map((p) =>
+      p === "xiaohongshu" ? '"xiaohongshu":{"title":"","body":"","tags":[""]}'
+      : p === "tiktok" ? '"tiktok":{"hook":"","script":""}'
+      : '"' + p + '":{"body":"","tags":[""]}'
+    ).join(",") + "}";
+
+  try {
+    const raw = await callWithFallback(loadModelConfig(), "전문_SNS콘텐츠", prompt, false, 2400,
+      { userId: u.id, kind: "content_pack" });
+    const parsed = parseJSON(raw);
+    if (!parsed) return res.status(502).json({ error: "글을 못 만들었어요. 주제를 조금 더 구체적으로 적어 주세요." });
+
+    /* 제휴 링크는 모델이 아니라 서버가 붙인다. 모델에게 맡기면 링크를 문단 중간에 끼워 넣거나
+       고지문구를 빠뜨린다. 둘 다 실제로 문제가 되는 실수다. */
+    const withLink = (text) => {
+      if (!affiliateUrl) return text;
+      return String(text || "").trim() + "\n\n" + affiliateUrl + "\n" + AFFILIATE_DISCLOSURE;
+    };
+
+    const out = {};
+    for (const p of picked) {
+      const v = parsed[p] || {};
+      if (p === "tiktok") {
+        out[p] = {
+          hook: String(v.hook || "").slice(0, 60),
+          script: withLink(String(v.script || "").slice(0, 2000)),
+        };
+      } else if (p === "xiaohongshu") {
+        out[p] = {
+          title: String(v.title || "").slice(0, 40),
+          body: withLink(String(v.body || "").slice(0, 2000)),
+          tags: (Array.isArray(v.tags) ? v.tags : []).slice(0, 8).map((x) => String(x).slice(0, 24)),
+        };
+      } else {
+        const body = String(v.body || "").slice(0, p === "threads" ? 500 : 2200);
+        out[p] = {
+          body: withLink(body),
+          tags: (Array.isArray(v.tags) ? v.tags : []).slice(0, p === "threads" ? 1 : 5)
+            .map((x) => String(x).slice(0, 24)),
+        };
+      }
+    }
+
+    const credits = Math.max(0, (u.credits || 0) - COST_PACK);
+    db.updateCredits(u.id, credits, u.ceiling);
+    db.addUsage(u.id, { at: nowKR(), amount: COST_PACK, kind: "정보성 글 묶음", label: topic.slice(0, 40) });
+
+    res.json({ ok: true, topic, platforms: picked, content: out, hasAffiliate: !!affiliateUrl, credits });
+  } catch (e) {
+    res.status(500).json({ error: "글 만들기 실패: " + e.message });
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════
    ⑨ 손으로 올리기 — API 심사를 기다리는 동안에도 계정을 키운다
 
    인스타 자동 발행은 비즈니스 계정 + 메타 앱 심사가 끝나야 열린다. 그 전까지 계획된 글은

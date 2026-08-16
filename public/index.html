@@ -646,6 +646,23 @@
     color:var(--ink); cursor:pointer; }
   .hour-pick button:hover{ border-color:var(--purple); color:var(--purple); }
 
+  /* ══════ 정보성 글 묶음 ══════ */
+  .pack-out{ margin-top:16px; display:flex; flex-direction:column; gap:14px; }
+  .pack-card{ border:1px solid var(--line); border-radius:var(--r-2); padding:14px 15px; background:#fff; }
+  .pack-card .ph{ display:flex; align-items:center; justify-content:space-between;
+    gap:10px; margin-bottom:9px; }
+  .pack-card .ph b{ font-size:13.5px; }
+  .pack-card .ph span{ font-family:var(--f-data); font-size:11px; color:var(--soft); }
+  .pack-card .pt{ font-size:13.5px; font-weight:700; margin-bottom:7px; }
+  .pack-card textarea{ width:100%; min-height:130px; font-size:13px; line-height:1.75;
+    padding:11px 12px; border:1px solid var(--line); border-radius:var(--r-1);
+    background:var(--bg); color:var(--ink); resize:vertical; white-space:pre-wrap; }
+  .pack-card .tg{ margin-top:8px; display:flex; gap:5px; flex-wrap:wrap; }
+  .pack-card .tg span{ font-size:11.5px; padding:3px 9px; background:var(--wash);
+    color:var(--purple); border-radius:999px; }
+  .pack-card .cp{ margin-top:9px; }
+  .pack-over{ color:#c0563f; }
+
   /* ══════ 만들어서 직접 올리기 ══════ */
   .ig-post .mk{ font-size:11.5px; font-weight:600; padding:4px 10px; border-radius:999px;
     border:1px solid var(--line); background:#fff; color:var(--purple); cursor:pointer;
@@ -1361,6 +1378,27 @@
         <div class="t-label" style="margin:22px 0 12px;">올릴 예정</div>
         <div class="ig-box" id="igPosts"><div class="ig-empty">아직 계획된 게시물이 없어요.</div></div>
         <div class="made-box" id="madeBox" style="display:none;"></div>
+
+        <div class="section-header" style="margin-top:26px;">
+          <div class="section-title">정보성 글 만들기</div>
+        </div>
+        <div class="ig-box">
+          <label for="packTopic">어떤 정보를 다룰까요?</label>
+          <textarea id="packTopic" style="min-height:62px;"
+            placeholder="예) 자취방 곰팡이 생기는 진짜 원인과 계절별로 막는 법"></textarea>
+          <label>올릴 곳</label>
+          <div class="style-pick" id="packPlatforms"></div>
+          <label for="packLink">제휴 링크 (없으면 비워 두세요)</label>
+          <input id="packLink" placeholder="https://...">
+          <div class="ig-hint">링크를 넣으면 <b>본문 맨 끝</b>에 고지문구와 함께 붙습니다.
+            앞에 두면 광고글로 읽혀 안 읽히고, 고지를 빼면 표시광고법 위반이에요.
+            파는 글이 아니라 읽고 도움이 되는 글로 씁니다.</div>
+          <div class="ig-actions">
+            <button class="bigbtn go" id="packBtn">글 만들기</button>
+          </div>
+          <div class="cn-cost" id="packCost"></div>
+          <div class="pack-out" id="packOut" style="display:none;"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -2303,6 +2341,108 @@ function renderIgCost(){
   el.textContent = n ? ('주 ' + n + '개 = 카드뉴스 ' + cards + ' + 릴스 ' + reels + ' · 약 ' + total + ' 크레딧') : '';
 }
 
+/* ══════ 정보성 글 묶음 ══════ */
+var packState = { platforms: [], picked: {}, cost: 25 };
+
+function renderPackPlatforms(){
+  var box = document.getElementById('packPlatforms');
+  box.innerHTML = '';
+  packState.platforms.forEach(function(p){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = packState.picked[p.key] ? 'on' : '';
+    b.textContent = p.label;
+    b.onclick = function(){
+      packState.picked[p.key] = !packState.picked[p.key];
+      renderPackPlatforms();
+    };
+    box.appendChild(b);
+  });
+  var n = packState.platforms.filter(function(p){ return packState.picked[p.key]; }).length;
+  // 크레딧은 플랫폼 수와 무관하게 한 번만 나간다 — 모델 호출이 한 번이라서다.
+  document.getElementById('packCost').textContent =
+    n ? (n + '개 플랫폼 · ' + packState.cost + ' 크레딧 (몇 개를 고르든 같습니다)') : '올릴 곳을 고르세요';
+}
+
+function loadPackPlatforms(){
+  igApi('/api/content/platforms').then(function(d){
+    packState.platforms = d.platforms || [];
+    packState.cost = d.cost || 25;
+    // 처음엔 전부 켜 둔다. 하나 써서 네 군데 쓰는 게 이 기능의 목적이다.
+    packState.platforms.forEach(function(p){ packState.picked[p.key] = true; });
+    renderPackPlatforms();
+  }).catch(function(){});
+}
+
+/* 글자 수가 넘치면 그 자리에서 알려준다. 쓰레드 500자, 샤오홍슈 제목 20자는
+   넘기면 플랫폼이 잘라 버려서, 올린 뒤에 알면 늦다. */
+var PACK_LIMIT = { threads: 500 };
+var XHS_TITLE_LIMIT = 20;
+
+function packCard(key, label, data){
+  var id = 'pack_' + key;
+  var title = data.title
+    ? '<div class="pt">' + esc(data.title)
+      + (data.title.length > XHS_TITLE_LIMIT
+         ? ' <span class="pack-over">제목 ' + data.title.length + '자 — ' + XHS_TITLE_LIMIT + '자 넘으면 목록에서 잘려요</span>' : '')
+      + '</div>'
+    : '';
+  var text = data.script != null ? data.script : data.body;
+  var len = String(text || '').length;
+  var over = PACK_LIMIT[key] && len > PACK_LIMIT[key]
+    ? ' <span class="pack-over">' + PACK_LIMIT[key] + '자 초과</span>' : '';
+  var tags = (data.tags || []).length
+    ? '<div class="tg">' + data.tags.map(function(t){
+        return '<span>' + esc(t.charAt(0) === '#' ? t : '#' + t) + '</span>'; }).join('') + '</div>'
+    : '';
+  return '<div class="pack-card">'
+    + '<div class="ph"><b>' + esc(label) + '</b><span>' + len + '자' + over + '</span></div>'
+    + (data.hook ? '<div class="pt">' + esc(data.hook) + '</div>' : '')
+    + title
+    + '<textarea readonly id="' + id + '">' + esc(text || '') + '</textarea>'
+    + tags
+    + '<button class="btn-sm cp" data-copy="' + id + '">복사</button>'
+    + '</div>';
+}
+
+function renderPack(d){
+  var box = document.getElementById('packOut');
+  var labels = {};
+  packState.platforms.forEach(function(p){ labels[p.key] = p.label; });
+  box.innerHTML = (d.platforms || []).map(function(k){
+    return packCard(k, labels[k] || k, (d.content || {})[k] || {});
+  }).join('');
+  box.style.display = 'block';
+  box.querySelectorAll('[data-copy]').forEach(function(b){
+    b.onclick = function(){
+      var t = document.getElementById(b.getAttribute('data-copy'));
+      t.select();
+      if(navigator.clipboard){ navigator.clipboard.writeText(t.value).then(function(){ celebrate('복사했어요'); }); }
+      else { document.execCommand('copy'); celebrate('복사했어요'); }
+    };
+  });
+  box.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+document.getElementById('packBtn').onclick = function(){
+  var btn = this;
+  var topic = document.getElementById('packTopic').value.trim();
+  if(topic.length < 5){ document.getElementById('packTopic').focus(); return; }
+  var picked = packState.platforms.filter(function(p){ return packState.picked[p.key]; })
+    .map(function(p){ return p.key; });
+  if(!picked.length){ alert('올릴 곳을 하나 이상 고르세요.'); return; }
+  btn.disabled = true; btn.textContent = '쓰는 중…';
+  igApi('/api/content/pack', {
+    topic: topic, platforms: picked,
+    affiliateUrl: document.getElementById('packLink').value.trim()
+  }).then(function(d){
+      renderPack(d);
+      if(d.credits != null && me){ me.credits = d.credits; renderCredits(me); }
+    })
+    .catch(function(e){ alert(e.message); })
+    .then(function(){ btn.disabled = false; btn.textContent = '글 만들기'; });
+};
+
 /* ══════ 트렌드 조사 ══════ */
 function renderTrend(d){
   var body = document.getElementById('trendBody');
@@ -2520,6 +2660,7 @@ function loadInstagram(){
   loadBestHours();
   loadLeads();
   loadTrend();
+  loadPackPlatforms();
   igApi('/api/instagram/overview').then(applyIg).catch(function(e){ console.warn(e); });
 }
 
