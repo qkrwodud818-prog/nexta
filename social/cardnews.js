@@ -103,6 +103,12 @@ async function renderHookSlide({ hook, tag, photoBuffer, color1, color2 }, outPa
     photoDataUri = `data:image/png;base64,${cropped.toString("base64")}`;
   }
 
+  /* 훅의 세로 위치는 사진 유무로 갈린다. 사진이 있으면 그 아래에 놓아야 하지만,
+     없는데도 같은 자리에 두면 위쪽이 통째로 빈 화면이 된다. 정보성 카드는 사진이 없는 쪽이
+     기본이라, 없을 때는 가운데로 올린다. */
+  const hookLines = wrap(hook, 13).length;
+  const hookY = photoDataUri ? 800 : Math.round(H / 2 - ((hookLines - 1) * 82) / 2);
+
   const svg = `
   <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -119,8 +125,8 @@ async function renderHookSlide({ hook, tag, photoBuffer, color1, color2 }, outPa
         <circle cx="${W / 2}" cy="400" r="316" fill="none" stroke="#fff" stroke-width="8"/>
         <image href="${photoDataUri}" x="${W / 2 - 310}" y="90" width="620" height="620"/>
       ` : ""}
-      <text x="${W / 2}" y="800" font-size="66" font-weight="900" fill="#fff" text-anchor="middle">
-        ${multilineTspans(hook, W / 2, 800, 82, 13)}
+      <text x="${W / 2}" y="${hookY}" font-size="66" font-weight="900" fill="#fff" text-anchor="middle">
+        ${multilineTspans(hook, W / 2, hookY, 82, 13)}
       </text>
       <text x="${W / 2}" y="${H - 90}" font-size="32" fill="#fff" text-anchor="middle">다음 장에서 바로 확인 →</text>
     </g>
@@ -130,9 +136,17 @@ async function renderHookSlide({ hook, tag, photoBuffer, color1, color2 }, outPa
 
 // ── 슬라이드 2: 상품 정보 (특징 불릿 + 가격) ──
 async function renderInfoSlide({ title, bullets, price, color1, style }, outPath) {
+  /* 항목 수는 3개일 때도 7개일 때도 있다. 시작 위치를 고정하면 3개일 때 아래가 텅 비고
+     7개일 때는 가격 막대를 덮는다. 블록 전체를 남는 공간 가운데에 놓는다. */
+  const LINE = 110;
+  const topEdge = 260;                          // 제목 아래
+  const bottomEdge = price ? H - 300 : H - 120; // 가격 막대가 있으면 그 위까지만
+  const blockH = Math.max(0, (bullets.length - 1) * LINE);
+  const startY = Math.round(topEdge + (bottomEdge - topEdge - blockH) / 2);
+
   const bulletSvg = bullets
     .map((b, i) => {
-      const y = 380 + i * 110;
+      const y = startY + i * LINE;
       return `<circle cx="115" cy="${y - 12}" r="14" fill="${color1}"/>
               <text x="160" y="${y}" font-size="40" font-weight="700" fill="${style.bodyInk}">${esc(b)}</text>`;
     })
@@ -160,8 +174,11 @@ async function renderInfoSlide({ title, bullets, price, color1, style }, outPath
 }
 
 // ── 슬라이드 3: CTA (댓글 유도 + 쿠팡파트너스 고지문구) ──
-async function renderCtaSlide({ ctaText, commentKeyword, color1, color2, disclosure }, outPath) {
-  const badge = `댓글에 '${commentKeyword}' 남기면 DM으로 링크 드려요`;
+async function renderCtaSlide({ ctaText, commentKeyword, color1, color2, disclosure, badge: customBadge, hideMark }, outPath) {
+  /* 기본 문구는 링크를 미끼로 댓글을 받는 방식이다. 계정을 막 시작해 아직 링크가 없을 때
+     이걸 그대로 쓰면 줄 것도 없으면서 약속만 하는 글이 되고, 알고리즘도 홍보 계정으로 분류한다.
+     그래서 호출부가 문구를 정할 수 있어야 한다. */
+  const badge = customBadge || `댓글에 '${commentKeyword}' 남기면 DM으로 링크 드려요`;
   const svg = `
   <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -180,7 +197,7 @@ async function renderCtaSlide({ ctaText, commentKeyword, color1, color2, disclos
       ${disclosure ? `<text x="${W / 2}" y="${H - 150}" font-size="24" fill="#ffffffcc" text-anchor="middle">
         ${multilineTspans(disclosure, W / 2, H - 150, 34, 34)}
       </text>` : ""}
-      <text x="${W / 2}" y="${H - 30}" font-size="20" fill="#ffffff99" text-anchor="middle">Made with 넥스타 · ${esc(SITE_URL)}</text>
+      ${hideMark ? "" : `<text x="${W / 2}" y="${H - 30}" font-size="20" fill="#ffffff99" text-anchor="middle">Made with 넥스타 · ${esc(SITE_URL)}</text>`}
     </g>
   </svg>`;
   await sharp(Buffer.from(svg)).png().toFile(outPath);
@@ -228,6 +245,10 @@ async function generateCardNews(product, outDir) {
     {
       ctaText: product.cta || `이거 하나면\n고민 끝`,
       commentKeyword: product.commentKeyword || "정보",
+      badge: product.badge,
+      /* 콘텐츠 계정에 매 장 도구 이름이 박히면 아마추어로 보인다.
+         넥스타 홍보는 기본값으로 두되, 끌 수 있어야 한다. */
+      hideMark: !!product.hideMark,
       color1, color2,
       /* 고지문구는 실제로 제휴 수수료를 받을 때만 찍는다. 안 받는데 찍으면 거짓말이고,
          받는데 안 찍으면 표시광고법 위반이다. 둘 다 호출부가 알려줘야 정해진다. */
@@ -239,4 +260,155 @@ async function generateCardNews(product, outDir) {
   return [p1, p2, p3];
 }
 
-module.exports = { generateCardNews, STYLES, DEFAULT_STYLE };
+/* ══════════════════════════════════════════════════════════════
+   뉴스형 카드뉴스
+
+   인스타에서 실제로 도는 정보성 카드뉴스를 여러 장 뜯어보니 형태가 둘로 갈렸다.
+   하나는 AI 일러스트를 전면에 깐 캐릭터형, 다른 하나는 텍스트만으로 밀어붙이는 편집형이다.
+   여기 구현한 건 후자다 — 만드는 데 이미지 생성비가 들지 않고, 스크롤 중에 0.5초 만에
+   읽히는 쪽이라 짧은 호흡의 계정에 맞는다.
+
+   공통적으로 반복되던 것들: 흰색이 아니라 살짝 노란 크림 배경, 화면 절반을 먹는 검은 헤드라인,
+   핵심 어절에만 형광펜, 그리고 출처를 흰 카드로 따로 얹는 것.
+   ══════════════════════════════════════════════════════════════ */
+/* 레퍼런스를 넷 뜯어봤더니 반복되는 문법이 있었다 —
+   좌상단 배지, 화면 3할을 먹는 헤드라인, 강조는 딱 한 요소만, 연한 서브, 회차 번호, 하단 CTA.
+   문법은 가져오되 조합은 다르게 간다. 그대로 베끼면 아류로 읽히고, 그건 초기 신뢰에 제일 나쁘다.
+
+   구체적으로 넷과 다르게 잡은 것:
+   - 넷 다 밝은 배경이거나 사진 위였다 → 어두운 바탕으로 뒤집었다
+   - 넷 다 헤드라인이 가운데였다 → 왼쪽으로 붙였다
+   - 형광펜(사각 배경) 대신 글자색 + 굵은 밑줄로 강조한다
+   - 왼쪽에 세로 액센트 바를 세웠다. 넷 중 아무도 안 쓴 요소다
+   - 회차 숫자를 배경처럼 크게 깔았다 ("3초"라는 이름과 붙는 장치) */
+const NEWS = {
+  bg: "#15171e",
+  ink: "#f4f1e8",       // 순백은 어두운 바탕에서 눈이 아프다. 살짝 크림 쪽으로.
+  sub: "#8b909c",
+  mark: "#4ade9b",      // 강조 — 돈 얘기에 초록 계열이 자연스럽다
+  ghost: "#1e212a",     // 배경에 깔리는 회차 숫자
+  pad: 92,
+  barW: 10,
+};
+
+/* 형광펜 사각형을 그리려면 글자 폭을 알아야 하는데 SVG는 그걸 안 알려준다.
+   한글은 글자당 폭이 글자크기와 거의 같고 영숫자는 그 절반쯤이라, 그걸로 어림한다.
+   몇 픽셀 어긋나도 형광펜은 원래 삐뚤어서 오히려 자연스럽다. */
+function textWidth(s, size) {
+  let w = 0;
+  // 한글 자체는 정사각에 가깝지만 실제 렌더 폭은 그보다 조금 좁다. 형광펜이 글자 밖으로
+  // 삐져나오는 게 눈에 띄어서 0.96으로 눌렀다.
+  for (const ch of String(s)) w += /[ㄱ-힝]/.test(ch) ? size * 0.96 : size * 0.52;
+  return w;
+}
+
+/** 글자 수가 아니라 실제 폭으로 줄바꿈한다. 숫자·영문이 섞이면 글자 수 기준은 빗나간다. */
+function wrapByWidth(text, size, maxW) {
+  const out = [];
+  let line = "";
+  for (const ch of String(text)) {
+    if (textWidth(line + ch, size) > maxW && line) { out.push(line); line = ""; }
+    line += ch;
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+/** `*강조*` 로 감싼 부분은 색을 바꾸고 밑줄을 깐다. 왼쪽 정렬이라 시작 x가 고정이다. */
+function headlineSvg(line, y, size, x0) {
+  const parts = String(line).split(/(\*[^*]+\*)/).filter(Boolean);
+  let x = x0;
+  let out = "";
+  for (const p of parts) {
+    const t = p.replace(/\*/g, "");
+    const w = textWidth(t, size);
+    const on = p.startsWith("*");
+    out += `<text x="${Math.round(x)}" y="${y}" font-size="${size}" font-weight="900" ` +
+           `fill="${on ? NEWS.mark : NEWS.ink}" text-anchor="start">${esc(t)}</text>`;
+    if (on) {
+      // 밑줄은 글자 아래 살짝 띄운다. 붙이면 받침과 겹쳐 지저분해진다.
+      out += `<rect x="${Math.round(x)}" y="${Math.round(y + size * 0.16)}" ` +
+             `width="${Math.round(w)}" height="${Math.max(5, Math.round(size * 0.07))}" fill="${NEWS.mark}"/>`;
+    }
+    x += w;
+  }
+  return out;
+}
+
+/**
+ * 뉴스형 카드 한 장.
+ * @param {object} s { badge, no, headline(줄바꿈 \n, *강조*), sub, source:{title,press,date}, footer }
+ */
+async function renderNewsSlide(s, outPath) {
+  const x0 = NEWS.pad + NEWS.barW + 30;      // 세로 바 오른쪽에서 글이 시작한다
+  const size = s.headlineSize || 84;
+  const lines = String(s.headline || "").split("\n");
+  const lineH = Math.round(size * 1.3);
+  const startY = Math.round(H * 0.42);
+
+  const headline = lines
+    .map((ln, i) => headlineSvg(ln, startY + i * lineH, size, x0))
+    .join("\n");
+
+  const subY = startY + lines.length * lineH + 34;
+  const subSvg = s.sub
+    ? `<text x="${x0}" y="${subY}" font-size="35" fill="${NEWS.sub}">
+         ${wrapByWidth(s.sub.replace(/\n/g, " "), 35, W - x0 - NEWS.pad)
+           .map((l, i) => `<tspan x="${x0}" y="${subY + i * 54}">${esc(l)}</tspan>`).join("")}
+       </text>`
+    : "";
+
+  /* 출처. 기사 제목을 인용하고 매체·날짜를 밝히는 건 정당한 인용이다.
+     기사 사진을 가져다 쓰는 건 저작권 침해라 여기서는 아예 다루지 않는다. */
+  let sourceSvg = "";
+  if (s.source && s.source.title) {
+    const titleLines = wrapByWidth(s.source.title, 30, W - x0 - NEWS.pad - 30);
+    const cardY = H - 240;
+    sourceSvg = `
+      <rect x="${x0}" y="${cardY}" width="4" height="${34 + titleLines.length * 44}" fill="${NEWS.sub}"/>
+      <text x="${x0 + 24}" y="${cardY + 36}" font-size="30" font-weight="700" fill="${NEWS.ink}">
+        ${titleLines.map((l, i) => `<tspan x="${x0 + 24}" y="${cardY + 36 + i * 44}">${esc(l)}</tspan>`).join("")}
+      </text>
+      <text x="${x0 + 24}" y="${cardY + 44 + titleLines.length * 44}" font-size="25" fill="${NEWS.sub}">
+        ${esc(s.source.press || "")}${s.source.date ? "  ·  " + esc(s.source.date) : ""}
+      </text>`;
+  }
+
+  const badgeW = Math.round(textWidth(s.badge || "", 29) + 44);
+  const svg = `
+  <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+    <rect width="${W}" height="${H}" fill="${NEWS.bg}"/>
+    <g font-family="${FONT}">
+      <!-- 배경에 깔리는 큰 회차 숫자. 읽으라고 있는 게 아니라 장이 넘어가는 걸 느끼게 하는 장치다 -->
+      ${s.no ? `<text x="${W - 40}" y="${H * 0.30}" font-size="300" font-weight="900" fill="${NEWS.ghost}" text-anchor="end">${esc(s.no)}</text>` : ""}
+      <rect x="${NEWS.pad}" y="${H * 0.42 - 96}" width="${NEWS.barW}" height="${H * 0.42 + 40}" fill="${NEWS.mark}"/>
+      ${s.badge ? `
+        <rect x="${x0}" y="72" width="${badgeW}" height="50" rx="25" fill="none" stroke="${NEWS.mark}" stroke-width="2"/>
+        <text x="${x0 + 22}" y="106" font-size="29" font-weight="700" fill="${NEWS.mark}">${esc(s.badge)}</text>` : ""}
+      ${headline}
+      ${subSvg}
+      ${sourceSvg}
+      <text x="${x0}" y="${H - 76}" font-size="27" font-weight="700" fill="${NEWS.sub}">${esc(s.handle || "@3sec.money")}</text>
+      ${s.footer ? `<text x="${W - NEWS.pad}" y="${H - 76}" font-size="27" font-weight="700" fill="${NEWS.mark}" text-anchor="end">${esc(s.footer)}</text>` : ""}
+    </g>
+  </svg>`;
+  await sharp(Buffer.from(svg)).png().toFile(outPath);
+}
+
+/**
+ * 뉴스형 카드뉴스 여러 장.
+ * @param {object[]} slides renderNewsSlide가 받는 형태
+ * @param {string} outDir
+ */
+async function generateNewsCards(slides, outDir) {
+  fs.mkdirSync(outDir, { recursive: true });
+  const paths = [];
+  for (let i = 0; i < slides.length; i++) {
+    const p = path.join(outDir, "slide" + (i + 1) + ".png");
+    await renderNewsSlide(slides[i], p);
+    paths.push(p);
+  }
+  return paths;
+}
+
+module.exports = { generateCardNews, generateNewsCards, STYLES, DEFAULT_STYLE };

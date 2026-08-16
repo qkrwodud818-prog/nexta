@@ -4262,11 +4262,22 @@ app.post("/webhooks/instagram", async (req, res) => {
     const igUserId = req.body?.entry?.[0]?.id;
     const social = db.getSocialInstagramByIgUserId(igUserId);
     if (!social) return;
-    await handleCommentWebhook(req.body, {
+    const results = await handleCommentWebhook(req.body, {
       keyword: social.commentKeyword,
       replyMessage: social.dmMessage,
       accessToken: decryptSecret(social.accessTokenEnc),
     });
+
+    /* 결과를 남기지 않으면 DM이 나갔는지 알 방법이 없다. 메타는 토큰이 만료됐거나 권한이
+       없으면 조용히 거부하는데, 그게 안 보이면 "댓글 달면 보내드려요"라고 해놓고 아무것도
+       안 보내는 상태로 며칠이 지나간다. 실패는 반드시 눈에 띄어야 한다. */
+    for (const r of results) {
+      if (r.ok) {
+        console.log("[자동DM 발송] 댓글", r.commentId);
+      } else {
+        console.error("[자동DM 실패] 댓글", r.commentId, "—", r.error);
+      }
+    }
   } catch (e) {
     console.error("웹훅 처리 오류:", e.message);
   }
