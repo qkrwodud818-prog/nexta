@@ -662,6 +662,16 @@
     color:var(--purple); border-radius:999px; }
   .pack-card .cp{ margin-top:9px; }
   .pack-over{ color:#c0563f; }
+  .pack-saved{ margin-top:16px; }
+  .pack-saved h4{ font-size:12px; color:var(--soft); margin-bottom:8px; letter-spacing:.03em; }
+  .pack-row{ display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--line);
+    border-radius:var(--r-1); margin-bottom:6px; background:#fff; }
+  .pack-row .t{ flex:1; font-size:13px; color:var(--ink); overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; }
+  .pack-row .d{ font-family:var(--f-data); font-size:11px; color:var(--soft); white-space:nowrap; }
+  .pack-row button{ font-size:11.5px; padding:4px 10px; border-radius:999px; border:1px solid var(--line);
+    background:#fff; color:var(--purple); cursor:pointer; white-space:nowrap; }
+  .pack-row button.rm{ color:#c0563f; }
 
   /* ══════ 만들어서 직접 올리기 ══════ */
   .ig-post .mk{ font-size:11.5px; font-weight:600; padding:4px 10px; border-radius:999px;
@@ -1398,6 +1408,7 @@
           </div>
           <div class="cn-cost" id="packCost"></div>
           <div class="pack-out" id="packOut" style="display:none;"></div>
+          <div class="pack-saved" id="packSaved"></div>
         </div>
       </div>
     </div>
@@ -2424,6 +2435,41 @@ function renderPack(d){
   box.scrollIntoView({ behavior:'smooth', block:'nearest' });
 }
 
+/* 만들어 둔 글 목록. 크레딧을 써서 만든 걸 다시 만들 이유가 없다. */
+function renderSavedPacks(packs){
+  var box = document.getElementById('packSaved');
+  if(!packs || !packs.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<h4>만들어 둔 글 ' + packs.length + '개</h4>' + packs.map(function(p){
+    var d = new Date(p.createdAt);
+    var when = (d.getMonth()+1) + '/' + d.getDate();
+    return '<div class="pack-row">'
+      + '<span class="t">' + esc(p.topic) + '</span>'
+      + '<span class="d">' + when + ' · ' + (p.platforms||[]).length + '곳</span>'
+      + '<button data-open="' + esc(p.id) + '">열기</button>'
+      + '<button class="rm" data-drop="' + esc(p.id) + '">삭제</button>'
+      + '</div>';
+  }).join('');
+
+  box.querySelectorAll('[data-open]').forEach(function(b){
+    b.onclick = function(){
+      var p = packs.filter(function(x){ return x.id === b.getAttribute('data-open'); })[0];
+      if(p) renderPack(p);
+    };
+  });
+  box.querySelectorAll('[data-drop]').forEach(function(b){
+    b.onclick = function(){
+      if(!confirm('이 글을 지울까요? 되돌릴 수 없습니다.')) return;
+      igApi('/api/content/packs/' + encodeURIComponent(b.getAttribute('data-drop')), null, 'DELETE')
+        .then(function(d){ renderSavedPacks(d.packs || []); })
+        .catch(function(e){ alert(e.message); });
+    };
+  });
+}
+
+function loadSavedPacks(){
+  igApi('/api/content/packs').then(function(d){ renderSavedPacks(d.packs || []); }).catch(function(){});
+}
+
 document.getElementById('packBtn').onclick = function(){
   var btn = this;
   var topic = document.getElementById('packTopic').value.trim();
@@ -2437,6 +2483,7 @@ document.getElementById('packBtn').onclick = function(){
     affiliateUrl: document.getElementById('packLink').value.trim()
   }).then(function(d){
       renderPack(d);
+      loadSavedPacks();
       if(d.credits != null && me){ me.credits = d.credits; renderCredits(me); }
     })
     .catch(function(e){ alert(e.message); })
@@ -2661,6 +2708,7 @@ function loadInstagram(){
   loadLeads();
   loadTrend();
   loadPackPlatforms();
+  loadSavedPacks();
   igApi('/api/instagram/overview').then(applyIg).catch(function(e){ console.warn(e); });
 }
 

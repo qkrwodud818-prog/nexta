@@ -2518,6 +2518,20 @@ const PLATFORM_SPECS = {
 };
 const PLATFORM_KEYS = Object.keys(PLATFORM_SPECS);
 
+/* 만들어 둔 글 목록. 화면을 닫았다 열어도 그대로 있어야 한다. */
+app.get("/api/content/packs", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  res.json({ packs: db.listContentPacks(u.id, 30) });
+});
+
+app.delete("/api/content/packs/:id", (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "로그인이 필요합니다." });
+  if (!db.deleteContentPack(u.id, req.params.id)) return res.status(404).json({ error: "찾을 수 없습니다." });
+  res.json({ ok: true, packs: db.listContentPacks(u.id, 30) });
+});
+
 app.get("/api/content/platforms", (req, res) => {
   res.json({
     platforms: PLATFORM_KEYS.map((k) => ({ key: k, label: PLATFORM_SPECS[k].label })),
@@ -2614,7 +2628,12 @@ app.post("/api/content/pack", async (req, res) => {
     db.updateCredits(u.id, credits, u.ceiling);
     db.addUsage(u.id, { at: nowKR(), amount: COST_PACK, kind: "정보성 글 묶음", label: topic.slice(0, 40) });
 
-    res.json({ ok: true, topic, platforms: picked, content: out, hasAffiliate: !!affiliateUrl, credits });
+    /* 저장해 둔다. 크레딧을 써서 만든 걸 새로고침 한 번에 잃으면
+       그건 사용자 잘못이 아니라 만들어 두지 않은 쪽 잘못이다. */
+    const packId = crypto.randomBytes(6).toString("hex");
+    db.addContentPack(u.id, { id: packId, topic, platforms: picked, content: out, hasAffiliate: !!affiliateUrl });
+
+    res.json({ ok: true, id: packId, topic, platforms: picked, content: out, hasAffiliate: !!affiliateUrl, credits });
   } catch (e) {
     res.status(500).json({ error: "글 만들기 실패: " + e.message });
   }

@@ -348,6 +348,20 @@ db.exec(`
     PRIMARY KEY (content_id, on_date)
   );
 
+  /* ── 만들어 둔 정보성 글 ──────────────────────────────────
+     안 남겨두면 새로고침 한 번에 사라진다. 크레딧을 써서 만든 건데 화면에만 있으면
+     탭을 잘못 닫는 순간 다시 만들어야 하고, 그건 또 크레딧이다. */
+  CREATE TABLE IF NOT EXISTS content_packs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    topic TEXT NOT NULL,
+    platforms TEXT NOT NULL,     -- JSON 배열
+    content TEXT NOT NULL,       -- JSON: 플랫폼별 본문
+    has_affiliate INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_packs_user ON content_packs(user_id, created_at DESC);
+
   /* ── 해시태그 트렌드 조사 결과 ────────────────────────────
      메타는 계정당 7일에 해시태그 30개까지만 조회하게 해 둔다. 버튼을 누를 때마다
      새로 부르면 사용자가 며칠 만에 쿼터를 다 태우고, 그 뒤로는 조사가 아예 막힌다.
@@ -1657,6 +1671,32 @@ function getBreakoutPosts(userId, sinceDate, minMultiple, limit) {
     .map((r) => ({ ...r, multiple: Math.round((r.views / avg) * 10) / 10 }));
 }
 
+/* ── 만들어 둔 정보성 글 ──────────────────────────────────── */
+function hydratePack(r) {
+  const parse = (v, d) => { try { return v ? JSON.parse(v) : d; } catch { return d; } };
+  return {
+    id: r.id, topic: r.topic,
+    platforms: parse(r.platforms, []),
+    content: parse(r.content, {}),
+    hasAffiliate: !!r.has_affiliate,
+    createdAt: r.created_at,
+  };
+}
+function addContentPack(userId, p) {
+  db.prepare(
+    "INSERT INTO content_packs (id, user_id, topic, platforms, content, has_affiliate, created_at)" +
+    " VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(p.id, userId, p.topic, JSON.stringify(p.platforms || []),
+    JSON.stringify(p.content || {}), p.hasAffiliate ? 1 : 0, new Date().toISOString());
+}
+function listContentPacks(userId, limit) {
+  return db.prepare("SELECT * FROM content_packs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?")
+    .all(userId, limit || 30).map(hydratePack);
+}
+function deleteContentPack(userId, id) {
+  return db.prepare("DELETE FROM content_packs WHERE id = ? AND user_id = ?").run(id, userId).changes === 1;
+}
+
 /* ── 트렌드 조사 캐시 ─────────────────────────────────────── */
 function getIgTrend(userId) {
   const r = db.prepare("SELECT * FROM ig_trends WHERE user_id = ?").get(userId);
@@ -1747,6 +1787,7 @@ module.exports = {
   addPersona, getActivePersona, getPersonaById, listPersonas, activatePersona,
   recordPerf, getPerfByPurpose, getPerfByHour, getBreakoutPosts,
   getIgTrend, saveIgTrend,
+  addContentPack, listContentPacks, deleteContentPack,
   addLead, listLeads, setLeadDraft, setLeadStatus,
   getIgTarget, upsertIgTarget, addIgPosts, listIgPosts, deleteIgPost,
   getIgPost, claimIgPostForManual,
